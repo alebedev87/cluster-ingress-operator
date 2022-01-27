@@ -11,6 +11,7 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	operatorv1 "github.com/openshift/api/operator/v1"
+
 	"github.com/openshift/cluster-ingress-operator/pkg/operator/controller"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -547,6 +548,14 @@ func TestDesiredRouterDeployment(t *testing.T) {
 
 	checkDeploymentHasEnvSorted(t, deployment)
 
+	// verify the default ports are used
+	checkContainerPort(t, deployment, "http", 80)
+	checkContainerPort(t, deployment, "https", 443)
+	checkContainerPort(t, deployment, "metrics", 1936)
+
+	// verify the default environment variables for ports are used
+	checkDeploymentHasEnvVar(t, deployment, "STATS_PORT", true, "1936")
+
 	secretName := fmt.Sprintf("secret-%v", time.Now().UnixNano())
 	ci.Spec.DefaultCertificate = &corev1.LocalObjectReference{
 		Name: secretName,
@@ -612,6 +621,12 @@ func TestDesiredRouterDeployment(t *testing.T) {
 	expectedReplicas = 3
 	ci.Spec.Replicas = &expectedReplicas
 	ci.Status.EndpointPublishingStrategy.Type = operatorv1.HostNetworkStrategyType
+	ci.Status.EndpointPublishingStrategy.HostNetwork = &operatorv1.HostNetworkStrategy{
+		Protocol:  operatorv1.TCPProtocol,
+		HTTPPort:  8080,
+		HTTPSPort: 8443,
+		StatsPort: 9146,
+	}
 	networkConfig.Status.ClusterNetwork = []configv1.ClusterNetworkEntry{
 		{CIDR: "2620:0:2d0:200::7/32"},
 	}
@@ -706,6 +721,24 @@ func TestDesiredRouterDeployment(t *testing.T) {
 	checkDeploymentHasEnvVar(t, deployment, RouterHardStopAfterEnvName, false, "")
 
 	checkDeploymentHasEnvSorted(t, deployment)
+
+	checkDeploymentHasEnvVar(t, deployment, "ROUTER_SERVICE_HTTP_PORT", true, "8080")
+	checkDeploymentHasEnvVar(t, deployment, "ROUTER_SERVICE_HTTPS_PORT", true, "8443")
+	checkDeploymentHasEnvVar(t, deployment, "STATS_PORT", true, "9146")
+
+	checkContainerPort(t, deployment, "http", 8080)
+	checkContainerPort(t, deployment, "https", 8443)
+	checkContainerPort(t, deployment, "metrics", 9146)
+}
+
+func checkContainerPort(t *testing.T, d *appsv1.Deployment, portName string, port int32) {
+	t.Helper()
+	for _, p := range d.Spec.Template.Spec.Containers[0].Ports {
+		if p.Name == portName && p.ContainerPort == port {
+			return
+		}
+	}
+	t.Errorf("deployment %s container does not have port with name %s and number %d", d.Name, portName, port)
 }
 
 func TestInferTLSProfileSpecFromDeployment(t *testing.T) {
@@ -864,6 +897,16 @@ func TestDeploymentHash(t *testing.T) {
 			expectDeploymentHashChanged: true,
 			expectTemplateHashChanged:   true,
 		},
+		{
+			description: "if ports are changed",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = int32(8080)
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = int32(8443)
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = int32(8936)
+			},
+			expectDeploymentHashChanged: true,
+			expectTemplateHashChanged:   true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -878,6 +921,15 @@ func TestDeploymentHash(t *testing.T) {
 				Template: corev1.PodTemplateSpec{
 					Spec: corev1.PodSpec{
 						Tolerations: []corev1.Toleration{toleration, otherToleration},
+						Containers: []corev1.Container{
+							{
+								Ports: []corev1.ContainerPort{
+									{ContainerPort: 80},
+									{ContainerPort: 443},
+									{ContainerPort: 1936},
+								},
+							},
+						},
 					},
 				},
 				Replicas: &two,
@@ -1223,6 +1275,27 @@ func TestDeploymentConfigChanged(t *testing.T) {
 			},
 			expect: true,
 		},
+		{
+			description: "if container HTTP port is changed",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = 8080
+			},
+			expect: true,
+		},
+		{
+			description: "if container HTTPS port is changed",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = 8443
+			},
+			expect: true,
+		},
+		{
+			description: "if container Stats port is changed",
+			mutate: func(deployment *appsv1.Deployment) {
+				deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort = 8936
+			},
+			expect: true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1330,6 +1403,20 @@ func TestDeploymentConfigChanged(t *testing.T) {
 												IntVal: int32(1936),
 											},
 										},
+									},
+								},
+								Ports: []corev1.ContainerPort{
+									{
+										Name:          "http",
+										ContainerPort: int32(80),
+									},
+									{
+										Name:          "https",
+										ContainerPort: 443,
+									},
+									{
+										Name:          "metrics",
+										ContainerPort: 1936,
 									},
 								},
 							},
