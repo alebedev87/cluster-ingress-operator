@@ -650,6 +650,11 @@ func desiredRouterDeployment(ci *operatorv1.IngressController, ingressController
 				Value: strconv.Itoa(int(httpPort)),
 			},
 		)
+
+		// Set the port for the probes from the host network configuration
+		deployment.Spec.Template.Spec.Containers[0].LivenessProbe.ProbeHandler.HTTPGet.Port.IntVal = statsPort
+		deployment.Spec.Template.Spec.Containers[0].ReadinessProbe.ProbeHandler.HTTPGet.Port.IntVal = statsPort
+		deployment.Spec.Template.Spec.Containers[0].StartupProbe.ProbeHandler.HTTPGet.Port.IntVal = statsPort
 	}
 
 	// append the value for the metrics port to the list of environment variables
