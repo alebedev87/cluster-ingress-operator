@@ -188,7 +188,7 @@ func (c *multiNamespaceCache) IndexField(ctx context.Context, obj client.Object,
 		return nil //nolint:nilerr
 	}
 
-	if !isNamespaced {
+	if !isNamespaced || isNamespaced {
 		return c.clusterCache.IndexField(ctx, obj, field, extractValue)
 	}
 
