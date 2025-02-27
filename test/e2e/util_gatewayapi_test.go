@@ -19,6 +19,7 @@ import (
 	operatorcontroller "github.com/openshift/cluster-ingress-operator/pkg/operator/controller"
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -146,6 +147,53 @@ func deleteExistingCRD(t *testing.T, crdName string) error {
 		return fmt.Errorf("timed out waiting for gatewayAPI CRD %s to be deleted: %v", crdName, err)
 	}
 	t.Logf("deleted crd %s", crdName)
+	return nil
+}
+
+// deleteVAP delete given Validating Admission Policy.
+func deleteVAP(t *testing.T, vapName string) error {
+	t.Helper()
+
+	vap := &admissionregistrationv1.ValidatingAdmissionPolicy{}
+	newVAP := &admissionregistrationv1.ValidatingAdmissionPolicy{}
+	name := types.NamespacedName{Name: vapName}
+
+	if err := wait.PollUntilContextTimeout(context.Background(), 1*time.Second, 30*time.Second, false, func(context context.Context) (bool, error) {
+		if err := kclient.Get(context, name, vap); err != nil {
+			t.Logf("failed to get vap %q: %v, retrying ...", name, err)
+			return false, nil
+		}
+		return true, nil
+	}); err != nil {
+		return fmt.Errorf("failed to get vap %q: %w", name, err)
+	}
+
+	if err := kclient.Delete(context.Background(), vap); err != nil {
+		return fmt.Errorf("failed to delete vap %q: %w", name, err)
+	}
+
+	// Assert VAP is deleted and stay deleted.
+	if err := wait.PollUntilContextTimeout(context.Background(), 1*time.Second, 30*time.Second, false, func(ctx context.Context) (bool, error) {
+		if err := kclient.Get(ctx, name, newVAP); err != nil {
+			if kerrors.IsNotFound(err) {
+				// VAP does not exist as expected
+				return false, nil
+			}
+			t.Logf("failed to get vap %q: %v, retrying ...", vapName, err)
+			return false, nil
+		}
+		// Check if new VAP got recreated.
+		if newVAP != nil && newVAP.UID != vap.UID {
+			t.Logf("vap %q got recreated", vapName)
+			return true, nil
+		}
+		t.Logf("vap %q still exists", vapName)
+		return true, nil
+	}); err == nil {
+		return fmt.Errorf("gatewayAPI CRD VAP %q didn't stay deleted: %w", vapName, err)
+	}
+
+	t.Logf("deleted vap %q", vapName)
 	return nil
 }
 
@@ -650,4 +698,37 @@ func assertDNSRecord(t *testing.T, recordName types.NamespacedName) error {
 		return false, nil
 	})
 	return err
+}
+
+// assertVAP checks if the VAP of the given name exists, and returns an error if not.
+func assertVAP(t *testing.T, name string) error {
+	t.Helper()
+	vap := &admissionregistrationv1.ValidatingAdmissionPolicy{}
+	return wait.PollUntilContextTimeout(context.Background(), 1*time.Second, 1*time.Minute, false, func(context context.Context) (bool, error) {
+		if err := kclient.Get(context, types.NamespacedName{Name: name}, vap); err != nil {
+			t.Logf("failed to get vap %q: %v, retrying...", name, err)
+			return false, nil
+		}
+		return true, nil
+	})
+}
+
+// scaleDeployment scales a deployment with the given name to the specified number of replicas.
+func scaleDeployment(t *testing.T, namespace, name string, replicas int32) error {
+	t.Helper()
+
+	nsName := types.NamespacedName{Namespace: namespace, Name: name}
+	return wait.PollUntilContextTimeout(context.Background(), 1*time.Second, 30*time.Second, false, func(context context.Context) (bool, error) {
+		depl := &appsv1.Deployment{}
+		if err := kclient.Get(context, nsName, depl); err != nil {
+			t.Logf("failed to get deployment %q: %v, retrying...", nsName, err)
+			return false, nil
+		}
+		depl.Spec.Replicas = &replicas
+		if err := kclient.Update(context, depl); err != nil {
+			t.Logf("failed to update deployment %q: %v, retrying...", nsName, err)
+			return false, nil
+		}
+		return true, nil
+	})
 }

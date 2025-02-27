@@ -30,6 +30,12 @@ const (
 	expectedCatalogSourceNamespace = "openshift-marketplace"
 	// The test gateway name used in multiple places.
 	testGatewayName = "test-gateway"
+	// The name of Validating Admission Policy which forbids all modifications to Gateway API.
+	gwapiCRDVAPName = "openshift-ingress-operator-gatewayapi-crd-admission"
+	// cvoNamespace namespace of cluster version operator.
+	cvoNamespace = "cluster-version-operator"
+	// cvoDeploymentName name of cluster version operator deployment.
+	cvoDeploymentName = "cluster-version-operator"
 )
 
 var crdNames = []string{
@@ -156,6 +162,24 @@ func ensureCRDs(t *testing.T) {
 // deleteCRDs deletes Gateway API custom resource definitions.
 func deleteCRDs(t *testing.T) {
 	t.Helper()
+
+	// Removing ingress operator's Validating Admission Policy (VAP)
+	// which prevents modifications of Gateway API CRDs
+	// by anything other than the ingress operator.
+	scaleDeployment(t, cvoNamespace, cvoDeploymentName, 0)
+	if err := deleteVAP(t, gwapiCRDVAPName); err != nil {
+		// Stop here because VAP will prevent the deletion of CRDs.
+		t.Fatalf("failed to delete %q vap: %v", gwapiCRDVAPName, err)
+	}
+	defer func() {
+		// Putting the VAP back to ensure that VAP does not prevent
+		// the ingress operator from managing Gateway API CRDs.
+		scaleDeployment(t, cvoNamespace, cvoDeploymentName, 1)
+		if err := assertVAP(t, gwapiCRDVAPName); err != nil {
+			t.Errorf("failed to find expected %q vap: %v", gwapiCRDVAPName, err)
+		}
+	}()
+
 	for _, crdName := range crdNames {
 		err := deleteExistingCRD(t, crdName)
 		if err != nil {
