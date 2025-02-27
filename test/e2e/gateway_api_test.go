@@ -14,8 +14,10 @@ import (
 	"github.com/openshift/cluster-ingress-operator/pkg/operator/controller/gatewayclass"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/storage/names"
 
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -30,11 +32,11 @@ const (
 	expectedCatalogSourceNamespace = "openshift-marketplace"
 	// The test gateway name used in multiple places.
 	testGatewayName = "test-gateway"
-	// The name of Validating Admission Policy which forbids all modifications to Gateway API.
+	// gwapiCRDVAPName is the name of the ingress operator's Validating Admission Policy (VAP).
 	gwapiCRDVAPName = "openshift-ingress-operator-gatewayapi-crd-admission"
-	// cvoNamespace namespace of cluster version operator.
+	// cvoNamespace is the namespace of cluster version operator (CVO).
 	cvoNamespace = "cluster-version-operator"
-	// cvoDeploymentName name of cluster version operator deployment.
+	// cvoDeploymentName is the name of cluster version operator's deployment.
 	cvoDeploymentName = "cluster-version-operator"
 )
 
@@ -81,6 +83,7 @@ func TestGatewayAPI(t *testing.T) {
 	t.Run("testGatewayAPIResources", testGatewayAPIResources)
 	t.Run("testGatewayAPIObjects", testGatewayAPIObjects)
 	t.Run("testGatewayAPIIstioInstallation", testGatewayAPIIstioInstallation)
+	t.Run("testGatewayAPIResourcesProtection", testGatewayAPIResourcesProtection)
 }
 
 // testGatewayAPIResources tests that Gateway API Custom Resource Definitions are available.
@@ -147,6 +150,59 @@ func testGatewayAPIObjects(t *testing.T) {
 	}
 }
 
+// testGatewayAPIResourcesProtection verifies that the ingress operator's ValidatingAdmissionPolicy
+// fails admission requests to modify Gateway API CRDs for a user which is not ingress operator's service account.
+func testGatewayAPIResourcesProtection(t *testing.T) {
+	t.Helper()
+
+	var testCRDs []*apiextensionsv1.CustomResourceDefinition
+	for _, name := range crdNames {
+		testCRDs = append(testCRDs, buildGWAPICRDFromName(name))
+	}
+	expectedErrMsg := "modifications to Gateway API Custom Resource Definitions may only be made by the Ingress Operator"
+
+	// Verifying that GatewayAPI CRD creation is forbidden.
+	for i := range testCRDs {
+		if err := kclient.Create(context.Background(), testCRDs[i]); err != nil {
+			if !strings.Contains(err.Error(), expectedErrMsg) {
+				t.Errorf("unexpected error received while creating %q CRD: %v", testCRDs[i].Name, err)
+			}
+		} else {
+			t.Errorf("admission error is expected while creating %q CRD but not received", testCRDs[i].Name)
+		}
+	}
+
+	// Verifying that GatewayAPI CRD update is forbidden.
+	for i := range testCRDs {
+		crdName := types.NamespacedName{Name: testCRDs[i].Name}
+		crd := &apiextensionsv1.CustomResourceDefinition{}
+		if err := kclient.Get(context.Background(), crdName, crd); err != nil {
+			t.Errorf("failed to get %q CRD: %v", crdName.Name, err)
+			continue
+		}
+		crd.Spec = testCRDs[i].Spec
+		crd.Spec.Conversion = testCRDs[i].Spec.Conversion
+		if err := kclient.Update(context.Background(), crd); err != nil {
+			if !strings.Contains(err.Error(), expectedErrMsg) {
+				t.Errorf("unexpected error received while updating %q CRD: %v", testCRDs[i].Name, err)
+			}
+		} else {
+			t.Errorf("admission error is expected while updating %q CRD but not received", testCRDs[i].Name)
+		}
+	}
+
+	// Verifying that GatewayAPI CRD deletion is forbidden.
+	for i := range testCRDs {
+		if err := kclient.Delete(context.Background(), testCRDs[i]); err != nil {
+			if !strings.Contains(err.Error(), expectedErrMsg) {
+				t.Errorf("unexpected error received while deleting %q CRD: %v", testCRDs[i].Name, err)
+			}
+		} else {
+			t.Errorf("admission error is expected while deleting %q CRD but not received", testCRDs[i].Name)
+		}
+	}
+}
+
 // ensureCRDs tests that the Gateway API custom resource definitions exist.
 func ensureCRDs(t *testing.T) {
 	t.Helper()
@@ -163,7 +219,7 @@ func ensureCRDs(t *testing.T) {
 func deleteCRDs(t *testing.T) {
 	t.Helper()
 
-	// Removing ingress operator's Validating Admission Policy (VAP)
+	// Removing the ingress operator's Validating Admission Policy (VAP)
 	// which prevents modifications of Gateway API CRDs
 	// by anything other than the ingress operator.
 	scaleDeployment(t, cvoNamespace, cvoDeploymentName, 0)
@@ -172,7 +228,7 @@ func deleteCRDs(t *testing.T) {
 		t.Fatalf("failed to delete %q vap: %v", gwapiCRDVAPName, err)
 	}
 	defer func() {
-		// Putting the VAP back to ensure that VAP does not prevent
+		// Putting the VAP back to ensure that it does not prevent
 		// the ingress operator from managing Gateway API CRDs.
 		scaleDeployment(t, cvoNamespace, cvoDeploymentName, 1)
 		if err := assertVAP(t, gwapiCRDVAPName); err != nil {

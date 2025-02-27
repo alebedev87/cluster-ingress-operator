@@ -320,6 +320,71 @@ func buildHTTPRoute(routeName, namespace, parentgateway, parentNamespace, hostna
 	}
 }
 
+// buildGWAPICRDFromName initializes the GatewayAPI CRD deducing most of the fields from the given name.
+func buildGWAPICRDFromName(name string) *apiextensionsv1.CustomResourceDefinition {
+	var (
+		plural   = strings.Split(name, ".")[0]
+		group, _ = strings.CutPrefix(name, plural+".")
+		scope    = apiextensionsv1.NamespaceScoped
+		// removing trailing "s"
+		singular = plural[0 : len(plural)-1]
+		kind     string
+	)
+
+	switch plural {
+	case "gatewayclasses":
+		singular = "gatewayclass"
+		kind = "GatewayClass"
+		scope = apiextensionsv1.ClusterScoped
+	case "gateways":
+		kind = "Gateway"
+	case "httproutes":
+		kind = "HTTPRoute"
+	case "referencegrants":
+		kind = "ReferenceGrant"
+	}
+
+	return &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: plural + "." + group,
+			Annotations: map[string]string{
+				"api-approved.kubernetes.io": "https://github.com/kubernetes-sigs/gateway-api/pull/2466",
+			},
+		},
+		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+			Group: group,
+			Names: apiextensionsv1.CustomResourceDefinitionNames{
+				Singular: singular,
+				Plural:   plural,
+				Kind:     kind,
+			},
+			Scope: scope,
+			Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+				{
+					Name:    "v1",
+					Storage: true,
+					Served:  true,
+					Schema: &apiextensionsv1.CustomResourceValidation{
+						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+							Type: "object",
+						},
+					},
+				},
+				{
+					Name:    "v1beta1",
+					Storage: false,
+					Served:  true,
+					Schema: &apiextensionsv1.CustomResourceValidation{
+						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
+							Type: "object",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 // assertSubscription checks if the Subscription of the given name exists and returns an error if not.
 func assertSubscription(t *testing.T, namespace, subName string) error {
 	t.Helper()
