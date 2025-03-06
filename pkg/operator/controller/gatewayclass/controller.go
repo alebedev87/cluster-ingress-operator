@@ -84,6 +84,8 @@ func NewUnmanaged(mgr manager.Manager, config Config) (controller.Controller, er
 // Config holds all the configuration that must be provided when creating the
 // controller.
 type Config struct {
+	// GatewayAPIControllerEnabled indicates that the "GatewayAPIController" featuregate is enabled.
+	GatewayAPIControllerEnabled bool
 	// OperatorNamespace is the namespace in which the operator should
 	// create the ServiceMeshControlPlane CR.
 	OperatorNamespace string
@@ -121,6 +123,10 @@ func enqueueRequestForDefaultGatewayClassController(namespace string) handler.Ev
 // reconciles an Istio deployment.
 func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	log.Info("reconciling", "request", request)
+
+	if !r.config.GatewayAPIControllerEnabled {
+		return reconcile.Result{}, nil
+	}
 
 	var gatewayclass gatewayapiv1.GatewayClass
 	if err := r.cache.Get(ctx, request.NamespacedName, &gatewayclass); err != nil {

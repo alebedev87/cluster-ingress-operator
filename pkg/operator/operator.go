@@ -132,6 +132,7 @@ func New(config operatorconfig.Config, kubeConfig *rest.Config) (*Operator, erro
 	azureWorkloadIdentityEnabled := featureGates.Enabled(features.FeatureGateAzureWorkloadIdentity)
 	sharedVPCEnabled := featureGates.Enabled(features.FeatureGatePrivateHostedZoneAWS)
 	gatewayAPIEnabled := featureGates.Enabled(features.FeatureGateGatewayAPI)
+	gatewayAPIControllerEnabled := featureGates.Enabled(features.FeatureGateGatewayAPIController)
 	routeExternalCertificateEnabled := featureGates.Enabled(features.FeatureGateRouteExternalCertificate)
 	ingressControllerLBSubnetsAWSEnabled := featureGates.Enabled(features.FeatureGateIngressControllerLBSubnetsAWS)
 	ingressControllerEIPAllocationsAWSEnabled := featureGates.Enabled(features.FeatureGateSetEIPForNLBIngressController)
@@ -292,8 +293,9 @@ func New(config operatorconfig.Config, kubeConfig *rest.Config) (*Operator, erro
 	// the manager; the gatewayapi controller starts it after it creates the
 	// Gateway API CRDs.
 	gatewayClassController, err := gatewayclasscontroller.NewUnmanaged(mgr, gatewayclasscontroller.Config{
-		OperatorNamespace: config.Namespace,
-		OperandNamespace:  operatorcontroller.DefaultOperandNamespace,
+		GatewayAPIControllerEnabled: gatewayAPIControllerEnabled,
+		OperatorNamespace:           config.Namespace,
+		OperandNamespace:            operatorcontroller.DefaultOperandNamespace,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gatewayclass controller: %w", err)
