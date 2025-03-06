@@ -45,7 +45,7 @@ manifests:
 
 .PHONY: test
 test: generate
-	CGO_ENABLED=1 $(GO) test ./...
+	CGO_ENABLED=1 $(GO) test -run "$(TEST)" ./...
 
 .PHONY: release-local
 release-local:
