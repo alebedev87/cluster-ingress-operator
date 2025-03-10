@@ -313,7 +313,8 @@ func New(config operatorconfig.Config, kubeConfig *rest.Config) (*Operator, erro
 
 	// Set up the gatewayapi controller.
 	if _, err := gatewayapicontroller.New(mgr, gatewayapicontroller.Config{
-		GatewayAPIEnabled: gatewayAPIEnabled,
+		GatewayAPIEnabled:           gatewayAPIEnabled,
+		GatewayAPIControllerEnabled: gatewayAPIControllerEnabled,
 		DependentControllers: []controller.Controller{
 			gatewayClassController,
 			gatewayServiceDNSController,

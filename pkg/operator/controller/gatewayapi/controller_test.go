@@ -31,13 +31,14 @@ func Test_Reconcile(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name              string
-		gatewayAPIEnabled bool
-		existingObjects   []runtime.Object
-		expectCreate      []client.Object
-		expectUpdate      []client.Object
-		expectDelete      []client.Object
-		expectStartCtrl   bool
+		name                        string
+		gatewayAPIEnabled           bool
+		gatewayAPIControllerEnabled bool
+		existingObjects             []runtime.Object
+		expectCreate                []client.Object
+		expectUpdate                []client.Object
+		expectDelete                []client.Object
+		expectStartCtrl             bool
 	}{
 		{
 			name:              "gateway API disabled",
@@ -48,8 +49,9 @@ func Test_Reconcile(t *testing.T) {
 			expectStartCtrl:   false,
 		},
 		{
-			name:              "gateway API enabled",
-			gatewayAPIEnabled: true,
+			name:                        "gateway API enabled",
+			gatewayAPIEnabled:           true,
+			gatewayAPIControllerEnabled: true,
 			expectCreate: []client.Object{
 				crd("gatewayclasses.gateway.networking.k8s.io"),
 				crd("gateways.gateway.networking.k8s.io"),
@@ -59,6 +61,20 @@ func Test_Reconcile(t *testing.T) {
 			expectUpdate:    []client.Object{},
 			expectDelete:    []client.Object{},
 			expectStartCtrl: true,
+		},
+		{
+			name:                        "gateway API enabled, gateway API controller disabled",
+			gatewayAPIEnabled:           true,
+			gatewayAPIControllerEnabled: false,
+			expectCreate: []client.Object{
+				crd("gatewayclasses.gateway.networking.k8s.io"),
+				crd("gateways.gateway.networking.k8s.io"),
+				crd("httproutes.gateway.networking.k8s.io"),
+				crd("referencegrants.gateway.networking.k8s.io"),
+			},
+			expectUpdate:    []client.Object{},
+			expectDelete:    []client.Object{},
+			expectStartCtrl: false,
 		},
 	}
 
@@ -77,8 +93,9 @@ func Test_Reconcile(t *testing.T) {
 			reconciler := &reconciler{
 				client: cl,
 				config: Config{
-					GatewayAPIEnabled:    tc.gatewayAPIEnabled,
-					DependentControllers: []controller.Controller{ctrl},
+					GatewayAPIEnabled:           tc.gatewayAPIEnabled,
+					GatewayAPIControllerEnabled: tc.gatewayAPIControllerEnabled,
+					DependentControllers:        []controller.Controller{ctrl},
 				},
 			}
 			req := reconcile.Request{
