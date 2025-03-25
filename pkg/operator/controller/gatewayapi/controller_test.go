@@ -2,6 +2,7 @@ package gatewayapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,50 @@ func Test_Reconcile(t *testing.T) {
 			expectDelete:    []client.Object{},
 			expectStartCtrl: false,
 		},
+		/*
+			{
+				name:                        "gateway API enabled, unmanaged gateway CRDs deleted",
+				gatewayAPIEnabled:           true,
+				gatewayAPIControllerEnabled: true,
+				existingObjects: []runtime.Object{
+					crd("listenersets.gateway.networking.x-k8s.io"),
+				},
+				expectCreate: []client.Object{
+					crd("gatewayclasses.gateway.networking.k8s.io"),
+					crd("gateways.gateway.networking.k8s.io"),
+					crd("grpcroutes.gateway.networking.k8s.io"),
+					crd("httproutes.gateway.networking.k8s.io"),
+					crd("referencegrants.gateway.networking.k8s.io"),
+				},
+				expectUpdate: []client.Object{},
+				expectDelete: []client.Object{
+					crd("listenersets.gateway.networking.x-k8s.io"),
+				},
+				expectStartCtrl: true,
+			},
+			{
+				name:                        "gateway API enabled, third party CRDs not deleted",
+				gatewayAPIEnabled:           true,
+				gatewayAPIControllerEnabled: true,
+				existingObjects: []runtime.Object{
+					crd("listenersets.gateway.networking.x-k8s.io"),
+					crd("thirdpartycrd1.openshift.io"),
+					crd("thirdpartycrd2.openshift.io"),
+				},
+				expectCreate: []client.Object{
+					crd("gatewayclasses.gateway.networking.k8s.io"),
+					crd("gateways.gateway.networking.k8s.io"),
+					crd("grpcroutes.gateway.networking.k8s.io"),
+					crd("httproutes.gateway.networking.k8s.io"),
+					crd("referencegrants.gateway.networking.k8s.io"),
+				},
+				expectUpdate: []client.Object{},
+				expectDelete: []client.Object{
+					crd("listenersets.gateway.networking.x-k8s.io"),
+				},
+				expectStartCtrl: true,
+			},
+		*/
 	}
 
 	scheme := runtime.NewScheme()
@@ -89,6 +134,12 @@ func Test_Reconcile(t *testing.T) {
 			fakeClient := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRuntimeObjects(tc.existingObjects...).
+				WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "crdAPIGroup", client.IndexerFunc(func(o client.Object) []string {
+					if strings.Contains(o.GetName(), "gateway.networking") {
+						return []string{"gateway"}
+					}
+					return []string{}
+				})).
 				Build()
 			cl := &testutil.FakeClientRecorder{fakeClient, t, []client.Object{}, []client.Object{}, []client.Object{}}
 			ctrl := &testutil.FakeController{t, false, nil}
@@ -140,7 +191,13 @@ func TestReconcileOnlyStartsControllerOnce(t *testing.T) {
 	scheme := runtime.NewScheme()
 	configv1.Install(scheme)
 	apiextensionsv1.AddToScheme(scheme)
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects().Build()
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRuntimeObjects().
+		WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "crdAPIGroup", client.IndexerFunc(func(o client.Object) []string {
+			return []string{"gateway"} // all crds are gateway api ones
+		})).
+		Build()
 	cl := &testutil.FakeClientRecorder{fakeClient, t, []client.Object{}, []client.Object{}, []client.Object{}}
 	ctrl := &testutil.FakeController{t, false, make(chan struct{})}
 	reconciler := &reconciler{
