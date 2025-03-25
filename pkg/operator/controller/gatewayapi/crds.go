@@ -84,7 +84,7 @@ func (r *reconciler) ensureGatewayAPICRDs(ctx context.Context) error {
 // or "gateway.networking.x-k8s.io" in its "spec.group" field.
 func (r *reconciler) listUnmanagedGatewayAPICRDs(ctx context.Context) ([]string, error) {
 	gatewayAPICRDs := &apiextensionsv1.CustomResourceDefinitionList{}
-	if err := r.client.List(ctx, gatewayAPICRDs, client.MatchingFields{crdAPIGroupIndexFieldName: gatewayCRDAPIGroupIndexFieldValue}); err != nil {
+	if err := r.cache.List(ctx, gatewayAPICRDs, client.MatchingFields{crdAPIGroupIndexFieldName: gatewayCRDAPIGroupIndexFieldValue}); err != nil {
 		return nil, fmt.Errorf("failed to list gateway API CRDs: %w", err)
 	}
 

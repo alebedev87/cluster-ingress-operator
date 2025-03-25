@@ -15,6 +15,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -40,6 +41,7 @@ func New(mgr manager.Manager, config Config) (controller.Controller, error) {
 	operatorCache := mgr.GetCache()
 	reconciler := &reconciler{
 		client: mgr.GetClient(),
+		cache:  operatorCache,
 		config: config,
 	}
 	c, err := controller.New(controllerName, mgr, controller.Options{Reconciler: reconciler})
@@ -113,6 +115,7 @@ type reconciler struct {
 	config Config
 
 	client           client.Client
+	cache            cache.Cache
 	recorder         record.EventRecorder
 	startControllers sync.Once
 }
