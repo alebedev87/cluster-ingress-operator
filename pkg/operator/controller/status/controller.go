@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -130,6 +131,13 @@ type Config struct {
 	Namespace              string
 }
 
+// IngressOperatorStatusExtension holds status extensions of the ingress cluster operator.
+type IngressOperatorStatusExtension struct {
+	// UnmanagedGatewayAPICRDNames contains a comma separated list of unmanaged GatewayAPI CRDs
+	// which are present on the cluster.
+	UnmanagedGatewayAPICRDNames string `json:"unmanagedGatewayAPICRDNames,omitempty"`
+}
+
 // reconciler handles the actual status reconciliation logic in response to
 // events.
 type reconciler struct {
@@ -161,7 +169,7 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 	}
 	oldStatus := co.Status.DeepCopy()
 
-	state, err := r.getOperatorState(ingressNamespace, canaryNamespace)
+	state, err := r.getOperatorState(ingressNamespace, canaryNamespace, co)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to get operator state: %v", err)
 	}
@@ -243,7 +251,7 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 			r.config.IngressControllerImage,
 			r.config.CanaryImage,
 		),
-		computeOperatorDegradedCondition(state.IngressControllers),
+		computeOperatorDegradedCondition(state.IngressControllers, state.unmanagedGatewayAPICRDNames),
 		computeOperatorUpgradeableCondition(state.IngressControllers),
 		computeOperatorEvaluationConditionsDetectedCondition(state.IngressControllers),
 	)
@@ -295,12 +303,13 @@ type operatorState struct {
 	IngressControllers []operatorv1.IngressController
 	DNSRecords         []iov1.DNSRecord
 
-	haveOSSMSubscription bool
+	haveOSSMSubscription        bool
+	unmanagedGatewayAPICRDNames string
 }
 
 // getOperatorState gets and returns the resources necessary to compute the
 // operator's current state.
-func (r *reconciler) getOperatorState(ingressNamespace, canaryNamespace string) (operatorState, error) {
+func (r *reconciler) getOperatorState(ingressNamespace, canaryNamespace string, co *configv1.ClusterOperator) (operatorState, error) {
 	state := operatorState{}
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ingressNamespace}}
@@ -337,6 +346,14 @@ func (r *reconciler) getOperatorState(ingressNamespace, canaryNamespace string) 
 			}
 		} else {
 			state.haveOSSMSubscription = true
+		}
+
+		if len(co.Status.Extension.Raw) > 0 {
+			extension := &IngressOperatorStatusExtension{}
+			if err := json.Unmarshal(co.Status.Extension.Raw, extension); err != nil {
+				return state, fmt.Errorf("failed to unmarshal status extension of cluster operator %q: %w", co.Name, err)
+			}
+			state.unmanagedGatewayAPICRDNames = extension.UnmanagedGatewayAPICRDNames
 		}
 	}
 
@@ -385,8 +402,24 @@ func checkAllIngressesAvailable(ingresses []operatorv1.IngressController) bool {
 	return len(ingresses) != 0
 }
 
-// computeOperatorDegradedCondition computes the operator's current Degraded status state.
-func computeOperatorDegradedCondition(ingresses []operatorv1.IngressController) configv1.ClusterOperatorStatusCondition {
+func computeOperatorDegradedCondition(ingresses []operatorv1.IngressController, unmanagedGatewayAPICRDNames string) configv1.ClusterOperatorStatusCondition {
+	condition := computeIngressControllerDegradedCondition(ingresses)
+	if len(unmanagedGatewayAPICRDNames) > 0 {
+		gwapiCRDMsg := fmt.Sprintf("Unmanaged Gateway API CRDs found: %s.", unmanagedGatewayAPICRDNames)
+		if condition.Status != configv1.ConditionTrue {
+			condition.Status = configv1.ConditionTrue
+			condition.Reason = "GatewayAPICRDsDegraded"
+			condition.Message = gwapiCRDMsg
+		} else {
+			condition.Reason = "MultipleComponentsDegraded"
+			condition.Message = condition.Message + gwapiCRDMsg
+		}
+	}
+	return condition
+}
+
+// computeIngressControllerDegradedCondition computes the operator's current Degraded status state.
+func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressController) configv1.ClusterOperatorStatusCondition {
 	degradedCondition := configv1.ClusterOperatorStatusCondition{
 		Type: configv1.OperatorDegraded,
 	}
@@ -411,7 +444,7 @@ func computeOperatorDegradedCondition(ingresses []operatorv1.IngressController) 
 			case operatorv1.ConditionTrue:
 				degradedCondition.Status = configv1.ConditionTrue
 				degradedCondition.Reason = "IngressDegraded"
-				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s", ic.Name, cond.Reason, cond.Message)
+				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s.", ic.Name, cond.Reason, cond.Message)
 			default:
 				degradedCondition.Status = configv1.ConditionUnknown
 				degradedCondition.Reason = "IngressDegradedStatusUnknown"
