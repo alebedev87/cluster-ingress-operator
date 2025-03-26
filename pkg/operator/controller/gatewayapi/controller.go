@@ -135,7 +135,7 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 
 	if crdNames, err := r.listUnmanagedGatewayAPICRDs(ctx); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to list unmanaged gateway CRDs: %w", err)
-	} else if err = r.setUnmanagedGatewayCRDNamesStatus(ctx, crdNames); err != nil {
+	} else if err = r.setUnmanagedGatewayAPICRDNamesStatus(ctx, crdNames); err != nil {
 		return reconcile.Result{}, fmt.Errorf("failed to update the ingress cluster operator status: %w", err)
 	}
 

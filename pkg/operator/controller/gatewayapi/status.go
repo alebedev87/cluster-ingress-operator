@@ -19,16 +19,16 @@ import (
 
 // ingressOperatorStatusExtension ...
 type ingressOperatorStatusExtension struct {
-	UnmanagedGatewayCRDNames string `json:"unmanagedGatewayCRDNames"`
+	UnmanagedGatewayAPICRDNames string `json:"unmanagedGatewayAPICRDNames"`
 }
 
-// setUnmanagedGatewayCRDNamesStatus sets the status of the ingress cluster operator
+// setUnmanagedGatewayAPICRDNamesStatus sets the status of the ingress cluster operator
 // with the names of the unmanaged Gateway CRDs.
-func (r *reconciler) setUnmanagedGatewayCRDNamesStatus(ctx context.Context, crdNames []string) error {
+func (r *reconciler) setUnmanagedGatewayAPICRDNamesStatus(ctx context.Context, crdNames []string) error {
 	desiredExtension := &ingressOperatorStatusExtension{}
 	// If no CRDs were found, keep desired extension empty to reset the field to null.
 	if len(crdNames) > 0 {
-		desiredExtension.UnmanagedGatewayCRDNames = strings.Join(crdNames, ",")
+		desiredExtension.UnmanagedGatewayAPICRDNames = strings.Join(crdNames, ",")
 	}
 	return r.setClusterOperatorExtension(ctx, desiredExtension)
 }
