@@ -13,29 +13,20 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 
 	operatorcontroller "github.com/openshift/cluster-ingress-operator/pkg/operator/controller"
+	"github.com/openshift/cluster-ingress-operator/pkg/operator/controller/status"
 )
-
-// This file contains reconciler methods and functions which help to update the status of ingress cluster operator.
-
-// ingressOperatorStatusExtension ...
-type ingressOperatorStatusExtension struct {
-	UnmanagedGatewayAPICRDNames string `json:"unmanagedGatewayAPICRDNames"`
-}
 
 // setUnmanagedGatewayAPICRDNamesStatus sets the status of the ingress cluster operator
 // with the names of the unmanaged Gateway CRDs.
 func (r *reconciler) setUnmanagedGatewayAPICRDNamesStatus(ctx context.Context, crdNames []string) error {
-	desiredExtension := &ingressOperatorStatusExtension{}
-	// If no CRDs were found, keep desired extension empty to reset the field to null.
-	if len(crdNames) > 0 {
-		desiredExtension.UnmanagedGatewayAPICRDNames = strings.Join(crdNames, ",")
-	}
-	return r.setClusterOperatorExtension(ctx, desiredExtension)
+	return r.setClusterOperatorExtension(ctx, &status.IngressOperatorStatusExtension{
+		UnmanagedGatewayAPICRDNames: strings.Join(crdNames, ","),
+	})
 }
 
 // setClusterOperatorExtension attempts to ensure that the ingress cluster operator's status
 // is updated with the given extension. Returns an error if failed to update the status.
-func (r *reconciler) setClusterOperatorExtension(ctx context.Context, desiredExtension *ingressOperatorStatusExtension) error {
+func (r *reconciler) setClusterOperatorExtension(ctx context.Context, desiredExtension *status.IngressOperatorStatusExtension) error {
 	have, current, err := r.currentClusterOperator(ctx, operatorcontroller.IngressClusterOperatorName())
 	if err != nil {
 		return err
@@ -64,8 +55,8 @@ func (r *reconciler) currentClusterOperator(ctx context.Context, name types.Name
 
 // updateClusterOperatorExtension updates a cluster operator's status extension.
 // Returns a boolean indicating whether the cluster operator was updated, and an error value.
-func (r *reconciler) updateClusterOperatorExtension(ctx context.Context, current *configv1.ClusterOperator, desiredExtension *ingressOperatorStatusExtension) (bool, error) {
-	currentExtension := &ingressOperatorStatusExtension{}
+func (r *reconciler) updateClusterOperatorExtension(ctx context.Context, current *configv1.ClusterOperator, desiredExtension *status.IngressOperatorStatusExtension) (bool, error) {
+	currentExtension := &status.IngressOperatorStatusExtension{}
 	if len(current.Status.Extension.Raw) > 0 /*to avoid "unexpected end of JSON input" error*/ {
 		if err := json.Unmarshal(current.Status.Extension.Raw, currentExtension); err != nil {
 			return false, fmt.Errorf("failed to unmarshal status extension of cluster operator %q: %w", current.Name, err)
@@ -84,6 +75,6 @@ func (r *reconciler) updateClusterOperatorExtension(ctx context.Context, current
 	if err := r.client.Status().Update(ctx, updated); err != nil {
 		return false, fmt.Errorf("failed to update cluster operator %q: %w", updated.Name, err)
 	}
-	log.Info("updated cluster operator", "name", updated.Name, "status", updated.Status)
+	log.Info("updated cluster operator", "name", updated.Name, "status.extension", string(updated.Status.Extension.Raw))
 	return true, nil
 }
