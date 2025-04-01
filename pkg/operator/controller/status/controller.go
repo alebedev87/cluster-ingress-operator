@@ -251,7 +251,7 @@ func (r *reconciler) Reconcile(ctx context.Context, request reconcile.Request) (
 			r.config.IngressControllerImage,
 			r.config.CanaryImage,
 		),
-		computeOperatorDegradedCondition(state.IngressControllers, state.unmanagedGatewayAPICRDNames),
+		computeOperatorDegradedCondition(state),
 		computeOperatorUpgradeableCondition(state.IngressControllers),
 		computeOperatorEvaluationConditionsDetectedCondition(state.IngressControllers),
 	)
@@ -403,49 +403,27 @@ func checkAllIngressesAvailable(ingresses []operatorv1.IngressController) bool {
 }
 
 // computeIngressControllerDegradedCondition computes the operator's current Degraded status state.
-func computeOperatorDegradedCondition(ingresses []operatorv1.IngressController, unmanagedGatewayAPICRDNames string) configv1.ClusterOperatorStatusCondition {
-	condition := configv1.ClusterOperatorStatusCondition{
+func computeOperatorDegradedCondition(state operatorState) configv1.ClusterOperatorStatusCondition {
+	degradedCondition := configv1.ClusterOperatorStatusCondition{
 		Type: configv1.OperatorDegraded,
 	}
 
-	ingressControllersDegraded, ingressControllersDegradedReason, ingressControllersDegradedMessage := computeIngressControllerDegradedCondition(ingresses)
-	gatewayAPICRDsDegraded, gatewayAPICRDsDegradedReason, gatewayAPICRDsDegradedMessage := computeGatewayAPICRDsDegradedCondition(unmanagedGatewayAPICRDNames)
-
-	if ingressControllersDegraded == configv1.ConditionFalse && gatewayAPICRDsDegraded == configv1.ConditionFalse {
-		condition.Status = configv1.ConditionFalse
-		condition.Reason = "MultipleComponentsNotDegraded"
-		condition.Message = ingressControllersDegradedMessage + gatewayAPICRDsDegradedMessage
-	} else if ingressControllersDegraded == configv1.ConditionTrue && gatewayAPICRDsDegraded == configv1.ConditionTrue {
-		condition.Status = configv1.ConditionTrue
-		condition.Reason = "MultipleComponentsDegraded"
-		condition.Message = ingressControllersDegradedMessage + gatewayAPICRDsDegradedMessage
-	} else if ingressControllersDegraded == configv1.ConditionTrue {
-		condition.Status = configv1.ConditionTrue
-		condition.Reason = ingressControllersDegradedReason
-		condition.Message = ingressControllersDegradedMessage
-	} else if gatewayAPICRDsDegraded == configv1.ConditionTrue {
-		condition.Status = configv1.ConditionTrue
-		condition.Reason = gatewayAPICRDsDegradedReason
-		condition.Message = gatewayAPICRDsDegradedMessage
-	} else /*IngressControllers Unknown status*/ {
-		condition.Status = ingressControllersDegraded
-		condition.Reason = ingressControllersDegradedReason
-		condition.Message = ingressControllersDegradedMessage
+	for _, fn := range []func(state operatorState) configv1.ClusterOperatorStatusCondition{
+		computeIngressControllerDegradedCondition,
+		computeGatewayAPICRDsDegradedCondition,
+	} {
+		degradedCondition = joinConditions(degradedCondition, fn(state), "Degraded")
 	}
 
-	return condition
+	return degradedCondition
 }
 
-// computeIngressControllerDegradedCondition computes the degraded condition of IngressControllers.
-func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressController) (configv1.ConditionStatus, string, string) {
-	var (
-		status  configv1.ConditionStatus
-		reason  string
-		message string
-	)
+// computeIngressControllerDegradedCondition computes the degraded condition for IngressControllers.
+func computeIngressControllerDegradedCondition(state operatorState) configv1.ClusterOperatorStatusCondition {
+	degradedCondition := configv1.ClusterOperatorStatusCondition{}
 
 	foundDefaultIngressController := false
-	for _, ic := range ingresses {
+	for _, ic := range state.IngressControllers {
 		if ic.Name != manifests.DefaultIngressControllerName {
 			continue
 		}
@@ -458,40 +436,45 @@ func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressCon
 			foundDegradedStatusCondition = true
 			switch cond.Status {
 			case operatorv1.ConditionFalse:
-				status = configv1.ConditionFalse
-				reason = "IngressNotDegraded"
-				message = fmt.Sprintf("The %q ingress controller reports Degraded=False.", ic.Name)
+				degradedCondition.Status = configv1.ConditionFalse
+				degradedCondition.Reason = "IngressNotDegraded"
+				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=False.", ic.Name)
 			case operatorv1.ConditionTrue:
-				status = configv1.ConditionTrue
-				reason = "IngressDegraded"
-				message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s.", ic.Name, cond.Reason, cond.Message)
+				degradedCondition.Status = configv1.ConditionTrue
+				degradedCondition.Reason = "IngressDegraded"
+				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s.", ic.Name, cond.Reason, cond.Message)
 			default:
-				status = configv1.ConditionUnknown
-				reason = "IngressDegradedStatusUnknown"
-				message = fmt.Sprintf("The %q ingress controller reports Degraded=%s.", ic.Name, cond.Status)
+				degradedCondition.Status = configv1.ConditionUnknown
+				degradedCondition.Reason = "IngressDegradedStatusUnknown"
+				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=%s.", ic.Name, cond.Status)
 			}
 		}
 		if !foundDegradedStatusCondition {
-			status = configv1.ConditionUnknown
-			reason = "IngressDoesNotHaveDegradedCondition"
-			message = fmt.Sprintf("The %q ingress controller is not reporting a Degraded status condition.", ic.Name)
+			degradedCondition.Status = configv1.ConditionUnknown
+			degradedCondition.Reason = "IngressDoesNotHaveDegradedCondition"
+			degradedCondition.Message = fmt.Sprintf("The %q ingress controller is not reporting a Degraded status condition.", ic.Name)
 		}
 	}
 	if !foundDefaultIngressController {
-		status = configv1.ConditionTrue
-		reason = "IngressDoesNotExist"
-		message = fmt.Sprintf("The %q ingress controller does not exist.", manifests.DefaultIngressControllerName)
+		degradedCondition.Status = configv1.ConditionTrue
+		degradedCondition.Reason = "IngressDoesNotExist"
+		degradedCondition.Message = fmt.Sprintf("The %q ingress controller does not exist.", manifests.DefaultIngressControllerName)
 	}
 
-	return status, reason, message
+	return degradedCondition
 }
 
-// computeGatewayAPICRDsDegradedCondition computes the degraded condition of Gateway API CRDs.
-func computeGatewayAPICRDsDegradedCondition(unmanagedGatewayAPICRDNames string) (configv1.ConditionStatus, string, string) {
-	if len(unmanagedGatewayAPICRDNames) > 0 {
-		return configv1.ConditionTrue, "GatewayAPICRDsDegraded", fmt.Sprintf("Unmanaged Gateway API CRDs found: %s.", unmanagedGatewayAPICRDNames)
+// computeGatewayAPICRDsDegradedCondition computes the degraded condition for Gateway API CRDs.
+func computeGatewayAPICRDsDegradedCondition(state operatorState) configv1.ClusterOperatorStatusCondition {
+	degradedCondition := configv1.ClusterOperatorStatusCondition{}
+
+	if len(state.unmanagedGatewayAPICRDNames) > 0 {
+		degradedCondition.Status = configv1.ConditionTrue
+		degradedCondition.Reason = "GatewayAPICRDsDegraded"
+		degradedCondition.Message = fmt.Sprintf("Unmanaged Gateway API CRDs found: %s.", state.unmanagedGatewayAPICRDNames)
 	}
-	return configv1.ConditionFalse, "GatewayAPICRDsNotDegraded", "No unmanaged Gateway API CRDs found"
+
+	return degradedCondition
 }
 
 // computeOperatorUpgradeableCondition computes the operator's Upgradeable
@@ -745,4 +728,46 @@ func operatorStatusesEqual(a, b configv1.ClusterOperatorStatus) bool {
 	}
 
 	return true
+}
+
+// joinConditions merges two cluster operator conditions into one.
+// If both conditions have the same status:
+// - Reason becomes: "MultipleComponents[Not]" + condType.
+// - Messages are concatenated.
+// If the new condition has a higher-priority status, it overrides the current one.
+// Status priority (highest to lowest): True, False, Unknown, Empty.
+func joinConditions(currCond, newCond configv1.ClusterOperatorStatusCondition, condType string) configv1.ClusterOperatorStatusCondition {
+	switch newCond.Status {
+	case configv1.ConditionTrue:
+		if currCond.Status == configv1.ConditionTrue {
+			currCond.Reason = "MultipleComponents" + condType
+			currCond.Message += newCond.Message
+		} else {
+			// Degraded=True status overrides other statuses.
+			currCond.Status = newCond.Status
+			currCond.Reason = newCond.Reason
+			currCond.Message = newCond.Message
+		}
+	case configv1.ConditionFalse:
+		if currCond.Status == configv1.ConditionFalse {
+			currCond.Reason = "MultipleComponentsNot" + condType
+			currCond.Message += newCond.Message
+		} else if currCond.Status != configv1.ConditionTrue {
+			// Degraded=False overrides unknown and empty statuses.
+			currCond.Status = newCond.Status
+			currCond.Reason = newCond.Reason
+			currCond.Message = newCond.Message
+		}
+	case configv1.ConditionUnknown:
+		if currCond.Status == configv1.ConditionUnknown {
+			currCond.Reason = "MultipleComponents" + condType + "Unknown"
+			currCond.Message += newCond.Message
+		} else if currCond.Status == "" {
+			// Degraded=Unknown overrides empty status.
+			currCond.Status = newCond.Status
+			currCond.Reason = newCond.Reason
+			currCond.Message = newCond.Message
+		}
+	}
+	return currCond
 }
