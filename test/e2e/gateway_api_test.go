@@ -90,14 +90,6 @@ func TestGatewayAPI(t *testing.T) {
 		// TODO: Uninstall OSSM after test is completed.
 	})
 
-	// Create test experimental CRDs for the subsequent subtests.
-	// Specifically, `testGatewayAPIResourcesProtection`, which tests VAP protection
-	// for the experimental Gateway API group, needs to check the update verb.
-	// Since an API `Get` is called before the update, the CRD must exist in the cluster,
-	// just like standard Gateway API CRDs.
-	// `testOperatorDegradedCondition` also needs experimental CRDs to test the degraded condition.
-	bypassVAP(t, ensureExperimentalCRDs)
-
 	t.Run("testGatewayAPIResources", testGatewayAPIResources)
 	if gatewayAPIControllerEnabled {
 		t.Run("testGatewayAPIObjects", testGatewayAPIObjects)
@@ -324,6 +316,15 @@ func testGatewayAPIManualDeployment(t *testing.T) {
 // denies admission requests attempting to modify Gateway API CRDs on behalf of a user
 // who is not the ingress operator's service account.
 func testGatewayAPIResourcesProtection(t *testing.T) {
+	// Create test experimental CRDs to be able to check the VAP protection
+	// of the update verb for the experimental Gateway API group.
+	// Since an API `Get` is called before the update, the CRD must exist in the cluster,
+	// just like standard Gateway API CRDs.
+	bypassVAP(t, ensureExperimentalCRDs)
+	t.Cleanup(func() {
+		bypassVAP(t, deleteExperimentalCRDs)
+	})
+
 	// Get kube client which impersonates ingress operator's service account.
 	kubeConfig, err := config.GetConfig()
 	if err != nil {
@@ -408,9 +409,23 @@ func testGatewayAPIResourcesProtection(t *testing.T) {
 // testOperatorDegradedCondition verifies that unmanaged (e.g. experimental)
 // Gateway API CRDs affect the ingress cluster operator's Degraded status.
 func testOperatorDegradedCondition(t *testing.T) {
-	// The experimental CRDs were created at the beginning of `TestGatewayAPI`.
-	// So the ingress cluster operator should report Degraded=True.
+	// Ensure that the ingress operator is not in a Degraded state
+	// to prevent conflicts with the unmanaged Gateway API CRDs logic.
 	expectedDegraded := []configv1.ClusterOperatorStatusCondition{
+		{
+			Type:   configv1.OperatorDegraded,
+			Status: configv1.ConditionFalse,
+			Reason: "IngressNotDegraded",
+		},
+	}
+	if err := waitForClusterOperatorConditions(t, kclient, expectedDegraded...); err != nil {
+		t.Fatalf("Did not get expected degraded condition: %v", err)
+	}
+
+	// Create experimental CRDs to check if the ingress cluster operator
+	// transitions to the Degraded state.
+	bypassVAP(t, ensureExperimentalCRDs)
+	expectedDegraded = []configv1.ClusterOperatorStatusCondition{
 		{
 			Type:   configv1.OperatorDegraded,
 			Status: configv1.ConditionTrue,
@@ -421,17 +436,17 @@ func testOperatorDegradedCondition(t *testing.T) {
 		t.Errorf("Did not get expected degraded condition: %v", err)
 	}
 
-	// Remove the experimental CRDs to see the ingress cluster operator
-	// recover from the Degraded state.
+	// Remove the experimental CRDs to checks that the ingress cluster operator
+	// recovers from the Degraded state.
 	bypassVAP(t, deleteExperimentalCRDs)
-
-	expectedNotDegraded := []configv1.ClusterOperatorStatusCondition{
+	expectedDegraded = []configv1.ClusterOperatorStatusCondition{
 		{
 			Type:   configv1.OperatorDegraded,
 			Status: configv1.ConditionFalse,
+			Reason: "IngressNotDegraded",
 		},
 	}
-	if err := waitForClusterOperatorConditions(t, kclient, expectedNotDegraded...); err != nil {
+	if err := waitForClusterOperatorConditions(t, kclient, expectedDegraded...); err != nil {
 		t.Errorf("Did not get expected not degraded condition: %v", err)
 	}
 }
