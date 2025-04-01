@@ -66,7 +66,7 @@ func (r *reconciler) ensureCRD(ctx context.Context, desired *apiextensionsv1.Cus
 
 // ensureGatewayAPICRDs ensures the managed Gateway API CRDs are created and
 // returns an error value.  For now, the managed CRDs are the GatewayClass,
-// Gateway, HTTPRoute, and ReferenceGrant CRDs.
+// Gateway, GRPCRoute, HTTPRoute, and ReferenceGrant CRDs.
 func (r *reconciler) ensureGatewayAPICRDs(ctx context.Context) error {
 	var errs []error
 	for i := range managedCRDs {
@@ -84,15 +84,13 @@ func (r *reconciler) ensureGatewayAPICRDs(ctx context.Context) error {
 // or "gateway.networking.x-k8s.io" in its "spec.group" field.
 func (r *reconciler) listUnmanagedGatewayAPICRDs(ctx context.Context) ([]string, error) {
 	gatewayAPICRDs := &apiextensionsv1.CustomResourceDefinitionList{}
-	if err := r.cache.List(ctx, gatewayAPICRDs, client.MatchingFields{crdAPIGroupIndexFieldName: gatewayCRDAPIGroupIndexFieldValue}); err != nil {
-		return nil, fmt.Errorf("failed to list gateway API CRDs: %w", err)
+	if err := r.cache.List(ctx, gatewayAPICRDs, client.MatchingFields{gatewayAPICRDIndexFieldName: unmanagedGatewayAPICRDIndexFieldValue}); err != nil {
+		return nil, fmt.Errorf("failed to list unmanaged gateway API CRDs: %w", err)
 	}
 
 	var unmanagedCRDNames []string
 	for _, crd := range gatewayAPICRDs.Items {
-		if _, found := managedCRDMap[crd.Name]; !found {
-			unmanagedCRDNames = append(unmanagedCRDNames, crd.Name)
-		}
+		unmanagedCRDNames = append(unmanagedCRDNames, crd.Name)
 	}
 	return unmanagedCRDNames, nil
 }

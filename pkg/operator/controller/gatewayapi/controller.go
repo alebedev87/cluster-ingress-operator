@@ -27,10 +27,10 @@ import (
 )
 
 const (
-	controllerName                    = "gatewayapi_controller"
-	experimentalGatewayAPIGroupName   = "gateway.networking.x-k8s.io"
-	crdAPIGroupIndexFieldName         = "crdAPIGroup"
-	gatewayCRDAPIGroupIndexFieldValue = "gateway"
+	controllerName                        = "gatewayapi_controller"
+	experimentalGatewayAPIGroupName       = "gateway.networking.x-k8s.io"
+	gatewayAPICRDIndexFieldName           = "gatewayAPICRD"
+	unmanagedGatewayAPICRDIndexFieldValue = "unmanaged"
 )
 
 var log = logf.Logger.WithName(controllerName)
@@ -77,16 +77,17 @@ func New(mgr manager.Manager, config Config) (controller.Controller, error) {
 		return nil, err
 	}
 
-	// Index Gateway API CRDs by the "spec.group" field
-	// to enable efficient filtering during list operations.
-	// Currently, only Gateway API groups have a dedicated index field.
+	// Index unmanaged Gateway API CRDs to enable efficient filtering
+	// during list operations.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&apiextensionsv1.CustomResourceDefinition{},
-		crdAPIGroupIndexFieldName,
+		gatewayAPICRDIndexFieldName,
 		client.IndexerFunc(func(o client.Object) []string {
 			if isGatewayAPICRD(o) {
-				return []string{gatewayCRDAPIGroupIndexFieldValue}
+				if _, found := managedCRDMap[o.GetName()]; !found {
+					return []string{unmanagedGatewayAPICRDIndexFieldValue}
+				}
 			}
 			return []string{}
 		})); err != nil {

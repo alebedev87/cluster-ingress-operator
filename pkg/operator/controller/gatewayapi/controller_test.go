@@ -197,9 +197,10 @@ func Test_Reconcile(t *testing.T) {
 				WithScheme(scheme).
 				WithRuntimeObjects(tc.existingObjects...).
 				WithStatusSubresource(tc.existingStatusSubresource...).
-				WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "crdAPIGroup", client.IndexerFunc(func(o client.Object) []string {
-					if strings.Contains(o.GetName(), "gateway.networking") {
-						return []string{"gateway"}
+				WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "gatewayAPICRD", client.IndexerFunc(func(o client.Object) []string {
+					// Assume that all experimental CRDs are unmanaged.
+					if strings.Contains(o.GetName(), "gateway.networking.x-k8s.io") {
+						return []string{"unmanaged"}
 					}
 					return []string{}
 				})).
@@ -275,8 +276,9 @@ func TestReconcileOnlyStartsControllerOnce(t *testing.T) {
 			&configv1.ClusterOperator{
 				ObjectMeta: metav1.ObjectMeta{Name: "ingress"},
 			}).
-		WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "crdAPIGroup", client.IndexerFunc(func(o client.Object) []string {
-			return []string{"gateway"} // all crds are gateway api ones
+		WithIndex(&apiextensionsv1.CustomResourceDefinition{}, "gatewayAPICRD", client.IndexerFunc(func(o client.Object) []string {
+			// Assume that there are no unmanaged CRDs.
+			return []string{}
 		})).
 		Build()
 	cl := &testutil.FakeClientRecorder{
