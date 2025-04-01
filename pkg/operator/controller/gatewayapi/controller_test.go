@@ -37,6 +37,16 @@ func Test_Reconcile(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 		}
 	}
+	coWithExtension := func(name, extension string) *configv1.ClusterOperator {
+		co := co(name)
+		co.Status = configv1.ClusterOperatorStatus{
+			Extension: runtime.RawExtension{
+				Raw: []byte(extension),
+			},
+		}
+		return co
+	}
+
 	tests := []struct {
 		name                        string
 		gatewayAPIEnabled           bool
@@ -103,7 +113,7 @@ func Test_Reconcile(t *testing.T) {
 			expectStartCtrl: false,
 		},
 		{
-			name:                        "unmanaged gateway API CRDs",
+			name:                        "unmanaged gateway API CRDs created",
 			gatewayAPIEnabled:           true,
 			gatewayAPIControllerEnabled: true,
 			existingObjects: []runtime.Object{
@@ -123,7 +133,31 @@ func Test_Reconcile(t *testing.T) {
 			expectUpdate: []client.Object{},
 			expectDelete: []client.Object{},
 			expectStatusUpdate: []client.Object{
+				coWithExtension("ingress", `{"unmanagedGatewayAPICRDNames":"listenersets.gateway.networking.x-k8s.io"}`),
+			},
+			expectStartCtrl: true,
+		},
+		{
+			name:                        "unmanaged gateway API CRDs removed",
+			gatewayAPIEnabled:           true,
+			gatewayAPIControllerEnabled: true,
+			existingObjects: []runtime.Object{
+				coWithExtension("ingress", `{"unmanagedGatewayAPICRDNames":"listenersets.gateway.networking.x-k8s.io"}`),
+			},
+			existingStatusSubresource: []client.Object{
 				co("ingress"),
+			},
+			expectCreate: []client.Object{
+				crd("gatewayclasses.gateway.networking.k8s.io"),
+				crd("gateways.gateway.networking.k8s.io"),
+				crd("grpcroutes.gateway.networking.k8s.io"),
+				crd("httproutes.gateway.networking.k8s.io"),
+				crd("referencegrants.gateway.networking.k8s.io"),
+			},
+			expectUpdate: []client.Object{},
+			expectDelete: []client.Object{},
+			expectStatusUpdate: []client.Object{
+				coWithExtension("ingress", `{}`),
 			},
 			expectStartCtrl: true,
 		},
@@ -214,7 +248,6 @@ func Test_Reconcile(t *testing.T) {
 				cmpopts.IgnoreFields(metav1.ObjectMeta{}, "Annotations", "ResourceVersion"),
 				cmpopts.IgnoreFields(metav1.TypeMeta{}, "Kind", "APIVersion"),
 				cmpopts.IgnoreFields(apiextensionsv1.CustomResourceDefinition{}, "Spec"),
-				cmpopts.IgnoreFields(configv1.ClusterOperator{}, "Status"),
 			}
 			if diff := cmp.Diff(tc.expectCreate, cl.Added, cmpOpts...); diff != "" {
 				t.Fatalf("found diff between expected and actual creates: %s", diff)
