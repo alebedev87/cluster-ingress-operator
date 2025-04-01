@@ -402,27 +402,47 @@ func checkAllIngressesAvailable(ingresses []operatorv1.IngressController) bool {
 	return len(ingresses) != 0
 }
 
+// computeIngressControllerDegradedCondition computes the operator's current Degraded status state.
 func computeOperatorDegradedCondition(ingresses []operatorv1.IngressController, unmanagedGatewayAPICRDNames string) configv1.ClusterOperatorStatusCondition {
-	condition := computeIngressControllerDegradedCondition(ingresses)
-	if len(unmanagedGatewayAPICRDNames) > 0 {
-		gwapiCRDMsg := fmt.Sprintf("Unmanaged Gateway API CRDs found: %s.", unmanagedGatewayAPICRDNames)
-		if condition.Status != configv1.ConditionTrue {
-			condition.Status = configv1.ConditionTrue
-			condition.Reason = "GatewayAPICRDsDegraded"
-			condition.Message = gwapiCRDMsg
-		} else {
-			condition.Reason = "MultipleComponentsDegraded"
-			condition.Message = condition.Message + gwapiCRDMsg
-		}
+	condition := configv1.ClusterOperatorStatusCondition{
+		Type: configv1.OperatorDegraded,
 	}
+
+	ingressControllersDegraded, ingressControllersDegradedReason, ingressControllersDegradedMessage := computeIngressControllerDegradedCondition(ingresses)
+	gatewayAPICRDsDegraded, gatewayAPICRDsDegradedReason, gatewayAPICRDsDegradedMessage := computeGatewayAPICRDsDegradedCondition(unmanagedGatewayAPICRDNames)
+
+	if ingressControllersDegraded == configv1.ConditionFalse && gatewayAPICRDsDegraded == configv1.ConditionFalse {
+		condition.Status = configv1.ConditionFalse
+		condition.Reason = "MultipleComponentsNotDegraded"
+		condition.Message = ingressControllersDegradedMessage + gatewayAPICRDsDegradedMessage
+	} else if ingressControllersDegraded == configv1.ConditionTrue && gatewayAPICRDsDegraded == configv1.ConditionTrue {
+		condition.Status = configv1.ConditionTrue
+		condition.Reason = "MultipleComponentsDegraded"
+		condition.Message = ingressControllersDegradedMessage + gatewayAPICRDsDegradedMessage
+	} else if ingressControllersDegraded == configv1.ConditionTrue {
+		condition.Status = configv1.ConditionTrue
+		condition.Reason = ingressControllersDegradedReason
+		condition.Message = ingressControllersDegradedMessage
+	} else if gatewayAPICRDsDegraded == configv1.ConditionTrue {
+		condition.Status = configv1.ConditionTrue
+		condition.Reason = gatewayAPICRDsDegradedReason
+		condition.Message = gatewayAPICRDsDegradedMessage
+	} else /*IngressControllers Unknown status*/ {
+		condition.Status = ingressControllersDegraded
+		condition.Reason = ingressControllersDegradedReason
+		condition.Message = ingressControllersDegradedMessage
+	}
+
 	return condition
 }
 
-// computeIngressControllerDegradedCondition computes the operator's current Degraded status state.
-func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressController) configv1.ClusterOperatorStatusCondition {
-	degradedCondition := configv1.ClusterOperatorStatusCondition{
-		Type: configv1.OperatorDegraded,
-	}
+// computeIngressControllerDegradedCondition computes the degraded condition of IngressControllers.
+func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressController) (configv1.ConditionStatus, string, string) {
+	var (
+		status  configv1.ConditionStatus
+		reason  string
+		message string
+	)
 
 	foundDefaultIngressController := false
 	for _, ic := range ingresses {
@@ -438,32 +458,40 @@ func computeIngressControllerDegradedCondition(ingresses []operatorv1.IngressCon
 			foundDegradedStatusCondition = true
 			switch cond.Status {
 			case operatorv1.ConditionFalse:
-				degradedCondition.Status = configv1.ConditionFalse
-				degradedCondition.Reason = "IngressNotDegraded"
-				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=False.", ic.Name)
+				status = configv1.ConditionFalse
+				reason = "IngressNotDegraded"
+				message = fmt.Sprintf("The %q ingress controller reports Degraded=False.", ic.Name)
 			case operatorv1.ConditionTrue:
-				degradedCondition.Status = configv1.ConditionTrue
-				degradedCondition.Reason = "IngressDegraded"
-				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s.", ic.Name, cond.Reason, cond.Message)
+				status = configv1.ConditionTrue
+				reason = "IngressDegraded"
+				message = fmt.Sprintf("The %q ingress controller reports Degraded=True: %s: %s.", ic.Name, cond.Reason, cond.Message)
 			default:
-				degradedCondition.Status = configv1.ConditionUnknown
-				degradedCondition.Reason = "IngressDegradedStatusUnknown"
-				degradedCondition.Message = fmt.Sprintf("The %q ingress controller reports Degraded=%s.", ic.Name, cond.Status)
+				status = configv1.ConditionUnknown
+				reason = "IngressDegradedStatusUnknown"
+				message = fmt.Sprintf("The %q ingress controller reports Degraded=%s.", ic.Name, cond.Status)
 			}
 		}
 		if !foundDegradedStatusCondition {
-			degradedCondition.Status = configv1.ConditionUnknown
-			degradedCondition.Reason = "IngressDoesNotHaveDegradedCondition"
-			degradedCondition.Message = fmt.Sprintf("The %q ingress controller is not reporting a Degraded status condition.", ic.Name)
+			status = configv1.ConditionUnknown
+			reason = "IngressDoesNotHaveDegradedCondition"
+			message = fmt.Sprintf("The %q ingress controller is not reporting a Degraded status condition.", ic.Name)
 		}
 	}
 	if !foundDefaultIngressController {
-		degradedCondition.Status = configv1.ConditionTrue
-		degradedCondition.Reason = "IngressDoesNotExist"
-		degradedCondition.Message = fmt.Sprintf("The %q ingress controller does not exist.", manifests.DefaultIngressControllerName)
+		status = configv1.ConditionTrue
+		reason = "IngressDoesNotExist"
+		message = fmt.Sprintf("The %q ingress controller does not exist.", manifests.DefaultIngressControllerName)
 	}
 
-	return degradedCondition
+	return status, reason, message
+}
+
+// computeGatewayAPICRDsDegradedCondition computes the degraded condition of Gateway API CRDs.
+func computeGatewayAPICRDsDegradedCondition(unmanagedGatewayAPICRDNames string) (configv1.ConditionStatus, string, string) {
+	if len(unmanagedGatewayAPICRDNames) > 0 {
+		return configv1.ConditionTrue, "GatewayAPICRDsDegraded", fmt.Sprintf("Unmanaged Gateway API CRDs found: %s.", unmanagedGatewayAPICRDNames)
+	}
+	return configv1.ConditionFalse, "GatewayAPICRDsNotDegraded", "No unmanaged Gateway API CRDs found"
 }
 
 // computeOperatorUpgradeableCondition computes the operator's Upgradeable
