@@ -152,12 +152,52 @@ func subscriptionChanged(current, expected *operatorsv1alpha1.Subscription) (boo
 	return true, updated
 }
 
+func nextInstallPlan(ips []operatorsv1alpha1.InstallPlan) operatorsv1alpha1.InstallPlan {
+	var running *operatorsv1alpha1.InstallPlan
+	for _, ip := range ips {
+		if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseComplete {
+			notPresent := false
+			for _, step := range ip.Status.Plan {
+				if step.Status != operatorsv1alpha1.StepStatusPresent {
+					notPresent = true
+					break
+				}
+			}
+			if !notPresent {
+				running = ip
+				break
+			}
+
+		}
+	}
+	if running != nil {
+		for _, ip := range ips {
+			if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
+				notPresent := false
+				for _, bundle := range ip.Status.BundleLookups {
+					if bundle.Replaces == running.ClusterServiceVersionNames[0] {
+						return ip
+
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // ensureServiceMeshOperatorInstallPlan attempts to ensure that the install plan for the appropriate OSSM operator
 // version is approved.
 func (r *reconciler) ensureServiceMeshOperatorInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
 	haveInstallPlan, current, err := r.currentInstallPlan(ctx)
 	if err != nil {
 		return false, nil, err
+	}
+	if !haveInstallPlan {
+		if next := nextInstallPlan(allInstallPlans); next != nil {
+			haveInstallPlan = true
+			current = next
+		}
 	}
 	switch {
 	case !haveInstallPlan:
@@ -177,20 +217,22 @@ func (r *reconciler) ensureServiceMeshOperatorInstallPlan(ctx context.Context) (
 
 // currentInstallPlan returns the InstallPlan that describes installing the expected version of the GatewayAPI
 // implementation, if one exists.
-func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
+func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, []operatorsv1alpha1.InstallPlan, error) {
 	_, subscription, err := r.currentSubscription(ctx, operatorcontroller.ServiceMeshOperatorSubscriptionName())
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	installPlans := &operatorsv1alpha1.InstallPlanList{}
 	if err := r.client.List(ctx, installPlans, client.InNamespace(operatorcontroller.OpenshiftOperatorNamespace)); err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 	if installPlans == nil || len(installPlans.Items) == 0 {
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	var currentInstallPlan *operatorsv1alpha1.InstallPlan
 	multipleInstallPlans := false
+	// All installplans of OSSM subscription which require approval.
+	allInstallPlans := []operatorsv1alpha1.InstallPlan{}
 	for _, installPlan := range installPlans.Items {
 		if len(installPlan.OwnerReferences) == 0 || len(installPlan.Spec.ClusterServiceVersionNames) == 0 {
 			continue
@@ -205,10 +247,14 @@ func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1
 		if !ownerRefMatches {
 			continue
 		}
+
+		allInstallPlans = append(allInstallPlans, installPlan)
+
 		// Ignore InstallPlans not in the "RequiresApproval" state. OLM may not be done setting them up.
 		if installPlan.Status.Phase != operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
 			continue
 		}
+
 		for _, csvName := range installPlan.Spec.ClusterServiceVersionNames {
 			if csvName == r.config.GatewayAPIOperatorVersion {
 				// Keep the newest InstallPlan to return at the end of the loop.
@@ -227,7 +273,7 @@ func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1
 	if multipleInstallPlans {
 		log.Info(fmt.Sprintf("found multiple valid InstallPlans. using %s because it's the newest", currentInstallPlan.Name))
 	}
-	return (currentInstallPlan != nil), currentInstallPlan, nil
+	return (currentInstallPlan != nil), currentInstallPlan, allInstallPlans, nil
 }
 
 // desiredInstallPlan returns a version of the expected InstallPlan that is approved.
