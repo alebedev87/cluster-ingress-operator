@@ -152,33 +152,28 @@ func subscriptionChanged(current, expected *operatorsv1alpha1.Subscription) (boo
 	return true, updated
 }
 
-func nextInstallPlan(ips []operatorsv1alpha1.InstallPlan) operatorsv1alpha1.InstallPlan {
-	var running *operatorsv1alpha1.InstallPlan
-	for _, ip := range ips {
-		if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseComplete {
-			notPresent := false
-			for _, step := range ip.Status.Plan {
-				if step.Status != operatorsv1alpha1.StepStatusPresent {
-					notPresent = true
-					break
-				}
-			}
-			if !notPresent {
-				running = ip
-				break
-			}
-
+func (r *reconciler) currentClusterServiceversion(ctx context.Context) (bool, *operatorsv1alpha1.ClusterServiceVersion, error) {
+	csvs := &operatorsv1alpha1.ClusterServiceVersionList{}
+	if err := r.client.List(ctx, csvs, client.InNamespace(operatorcontroller.OpenshiftOperatorNamespace)); err != nil {
+		return false, nil, err
+	}
+	for _, csv := range csvs.Items {
+		if csv.Status.Phase == operatorsv1alpha1.CSVPhaseSucceeded {
+			return true, &csv, nil
 		}
 	}
-	if running != nil {
-		for _, ip := range ips {
-			if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
-				notPresent := false
-				for _, bundle := range ip.Status.BundleLookups {
-					if bundle.Replaces == running.ClusterServiceVersionNames[0] {
-						return ip
+	return false, nil, nil
+}
 
-					}
+func nextInstallPlan(ips []operatorsv1alpha1.InstallPlan, currentCSVName string) *operatorsv1alpha1.InstallPlan {
+	for _, ip := range ips {
+		if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
+			log.Info(fmt.Sprintf("installplan which requires approval: %s", ip.Name))
+			for _, bundle := range ip.Status.BundleLookups {
+				log.Info(fmt.Sprintf("bundle: %v", bundle))
+				if bundle.Replaces == currentCSVName {
+					log.Info(fmt.Sprintf("next installplan: %s", ip.Name))
+					return &ip
 				}
 			}
 		}
@@ -189,15 +184,31 @@ func nextInstallPlan(ips []operatorsv1alpha1.InstallPlan) operatorsv1alpha1.Inst
 // ensureServiceMeshOperatorInstallPlan attempts to ensure that the install plan for the appropriate OSSM operator
 // version is approved.
 func (r *reconciler) ensureServiceMeshOperatorInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
-	haveInstallPlan, current, err := r.currentInstallPlan(ctx)
+	haveInstallPlan, current, allInstallPlans, err := r.currentInstallPlan(ctx)
 	if err != nil {
 		return false, nil, err
 	}
 	if !haveInstallPlan {
-		if next := nextInstallPlan(allInstallPlans); next != nil {
-			haveInstallPlan = true
-			current = next
+		// No install plan with desired version found.
+		// Either we have a fresh cluster with no OSSM operator
+		// or we are in the upgrade territory.
+		// The latter means that we should follow the upgrade graph
+		// until the desired installplan appears.
+		// There is another possibility - the current CSV == desired CSV.
+		haveCSV, currentCSV, err := r.currentClusterServiceversion(ctx)
+		if err != nil {
+			return false, nil, err
 		}
+		if haveCSV && currentCSV.Name != r.config.GatewayAPIOperatorVersion {
+			log.Info("successful csv found", "name", currentCSV.Name)
+			if next := nextInstallPlan(allInstallPlans, currentCSV.Name); next != nil {
+				log.Info("approving intermidiate install plan", "name", next.Name, "csvVersion", next.Spec.ClusterServiceVersionNames[0])
+				haveInstallPlan = true
+				current = next
+			}
+		}
+		// No successful CSV exists: either we have a failed one or none.
+		// Either way we retry, see the switch below.
 	}
 	switch {
 	case !haveInstallPlan:
@@ -205,11 +216,13 @@ func (r *reconciler) ensureServiceMeshOperatorInstallPlan(ctx context.Context) (
 		// and let the OLM operator handle it.
 		return false, nil, nil
 	case haveInstallPlan:
+		log.Info("approving desired install plan", "name", current.Name, "csvVersion", current.Spec.ClusterServiceVersionNames[0])
 		desired := desiredInstallPlan(current)
 		if updated, err := r.updateInstallPlan(ctx, current, desired); err != nil {
 			return true, current, err
 		} else if updated {
-			return r.currentInstallPlan(ctx)
+			haveInstallPlan, current, allInstallPlans, err = r.currentInstallPlan(ctx)
+			return haveInstallPlan, current, err
 		}
 	}
 	return false, current, nil
