@@ -152,146 +152,34 @@ func subscriptionChanged(current, expected *operatorsv1alpha1.Subscription) (boo
 	return true, updated
 }
 
-func (r *reconciler) currentClusterServiceversion(ctx context.Context) (bool, *operatorsv1alpha1.ClusterServiceVersion, error) {
-	csvs := &operatorsv1alpha1.ClusterServiceVersionList{}
-	if err := r.client.List(ctx, csvs, client.InNamespace(operatorcontroller.OpenshiftOperatorNamespace)); err != nil {
-		return false, nil, err
-	}
-	for _, csv := range csvs.Items {
-		if csv.Status.Phase == operatorsv1alpha1.CSVPhaseSucceeded {
-			return true, &csv, nil
-		}
-	}
-	return false, nil, nil
-}
-
-func findNextInstallPlan(ips []operatorsv1alpha1.InstallPlan, currentCSVName string) *operatorsv1alpha1.InstallPlan {
-	for _, ip := range ips {
-		if ip.Status.Phase == operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
-			log.Info(fmt.Sprintf("installplan which requires approval: %s", ip.Name))
-			for _, bundle := range ip.Status.BundleLookups {
-				log.Info(fmt.Sprintf("bundle: %v", bundle))
-				if bundle.Replaces == currentCSVName {
-					log.Info(fmt.Sprintf("next installplan: %s", ip.Name))
-					return &ip
-				}
-			}
-		}
-	}
-	return nil
-}
-
 // ensureServiceMeshOperatorInstallPlan attempts to ensure that the install plan for the appropriate OSSM operator
 // version is approved.
 func (r *reconciler) ensureServiceMeshOperatorInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
-	haveInstallPlan, current, err := r.nextInstallPlan(ctx)
+	haveInstallPlan, current, err := r.currentInstallPlan(ctx)
 	if err != nil {
 		return false, nil, err
 	}
-	/*
-		if !haveInstallPlan {
-			// No install plan with desired version found.
-			// Either we have a fresh cluster with no OSSM operator
-			// or we are in the upgrade territory.
-			// The latter means that we should follow the upgrade graph
-			// until the desired installplan appears.
-			// There is another possibility - the current CSV == desired CSV.
-			haveCSV, currentCSV, err := r.currentClusterServiceversion(ctx)
-			if err != nil {
-				return false, nil, err
-			}
-			if haveCSV && currentCSV.Name != r.config.GatewayAPIOperatorVersion {
-				log.Info("successful csv found", "name", currentCSV.Name)
-				if next := nextInstallPlan(allInstallPlans, currentCSV.Name); next != nil {
-					log.Info("approving intermidiate install plan", "name", next.Name, "csvVersion", next.Spec.ClusterServiceVersionNames[0])
-					haveInstallPlan = true
-					current = next
-				}
-			}
-			// No successful CSV exists: either we have a failed one or none.
-			// Either way we retry, see the switch below.
-		}
-	*/
 	switch {
 	case !haveInstallPlan:
 		// The OLM operator creates the initial InstallPlan, so if it doesn't exist yet or it's been deleted, do nothing
 		// and let the OLM operator handle it.
 		return false, nil, nil
 	case haveInstallPlan:
-		log.Info("approving desired install plan", "name", current.Name, "csvVersion", current.Spec.ClusterServiceVersionNames[0])
 		desired := desiredInstallPlan(current)
 		if updated, err := r.updateInstallPlan(ctx, current, desired); err != nil {
 			return true, current, err
 		} else if updated {
-			haveInstallPlan, current, _, err = r.currentInstallPlan(ctx)
-			return haveInstallPlan, current, err
+			return r.currentInstallPlan(ctx)
 		}
 	}
 	return false, current, nil
 }
 
 // currentInstallPlan returns the InstallPlan that describes installing the expected version of the GatewayAPI
-// implementation, if one exists.
-func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, []operatorsv1alpha1.InstallPlan, error) {
-	_, subscription, err := r.currentSubscription(ctx, operatorcontroller.ServiceMeshOperatorSubscriptionName())
-	if err != nil {
-		return false, nil, nil, err
-	}
-	installPlans := &operatorsv1alpha1.InstallPlanList{}
-	if err := r.client.List(ctx, installPlans, client.InNamespace(operatorcontroller.OpenshiftOperatorNamespace)); err != nil {
-		return false, nil, nil, err
-	}
-	if installPlans == nil || len(installPlans.Items) == 0 {
-		return false, nil, nil, nil
-	}
-	var currentInstallPlan *operatorsv1alpha1.InstallPlan
-	multipleInstallPlans := false
-	// All installplans of OSSM subscription which require approval.
-	allInstallPlans := []operatorsv1alpha1.InstallPlan{}
-	for _, installPlan := range installPlans.Items {
-		if len(installPlan.OwnerReferences) == 0 || len(installPlan.Spec.ClusterServiceVersionNames) == 0 {
-			continue
-		}
-		ownerRefMatches := false
-		for _, ownerRef := range installPlan.OwnerReferences {
-			if ownerRef.UID == subscription.UID {
-				ownerRefMatches = true
-				break
-			}
-		}
-		if !ownerRefMatches {
-			continue
-		}
-
-		allInstallPlans = append(allInstallPlans, installPlan)
-
-		// Ignore InstallPlans not in the "RequiresApproval" state. OLM may not be done setting them up.
-		if installPlan.Status.Phase != operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
-			continue
-		}
-
-		for _, csvName := range installPlan.Spec.ClusterServiceVersionNames {
-			if csvName == r.config.GatewayAPIOperatorVersion {
-				// Keep the newest InstallPlan to return at the end of the loop.
-				if currentInstallPlan == nil {
-					currentInstallPlan = &installPlan
-					break
-				}
-				multipleInstallPlans = true
-				if currentInstallPlan.ObjectMeta.CreationTimestamp.Before(&installPlan.ObjectMeta.CreationTimestamp) {
-					currentInstallPlan = &installPlan
-					break
-				}
-			}
-		}
-	}
-	if multipleInstallPlans {
-		log.Info(fmt.Sprintf("found multiple valid InstallPlans. using %s because it's the newest", currentInstallPlan.Name))
-	}
-	return (currentInstallPlan != nil), currentInstallPlan, allInstallPlans, nil
-}
-
-func (r *reconciler) nextInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
+// implementation. If it does not exists the installplan which replaces the currently installed one is returned.
+// The latter is supposed to advance the OSSM operator towards the next CSV in the upgrade graph
+// in the esperance that the configured version is there upper the graph.
+func (r *reconciler) currentInstallPlan(ctx context.Context) (bool, *operatorsv1alpha1.InstallPlan, error) {
 	_, subscription, err := r.currentSubscription(ctx, operatorcontroller.ServiceMeshOperatorSubscriptionName())
 	if err != nil {
 		return false, nil, err
@@ -304,7 +192,7 @@ func (r *reconciler) nextInstallPlan(ctx context.Context) (bool, *operatorsv1alp
 		return false, nil, nil
 	}
 	var currentInstallPlan, nextInstallPlan *operatorsv1alpha1.InstallPlan
-	multipleInstallPlans, currentInstallPlanFound := false, false
+	multipleInstallPlans := false
 	for _, installPlan := range installPlans.Items {
 		if len(installPlan.OwnerReferences) == 0 || len(installPlan.Spec.ClusterServiceVersionNames) == 0 {
 			continue
@@ -319,15 +207,13 @@ func (r *reconciler) nextInstallPlan(ctx context.Context) (bool, *operatorsv1alp
 		if !ownerRefMatches {
 			continue
 		}
-
 		// Ignore InstallPlans not in the "RequiresApproval" state. OLM may not be done setting them up.
 		if installPlan.Status.Phase != operatorsv1alpha1.InstallPlanPhaseRequiresApproval {
 			continue
 		}
-
+		// Check whether InstallPlan implements the desired operator version.
 		for _, csvName := range installPlan.Spec.ClusterServiceVersionNames {
 			if csvName == r.config.GatewayAPIOperatorVersion {
-				currentInstallPlanFound = true
 				// Keep the newest InstallPlan to return at the end of the loop.
 				if currentInstallPlan == nil {
 					currentInstallPlan = &installPlan
@@ -340,19 +226,34 @@ func (r *reconciler) nextInstallPlan(ctx context.Context) (bool, *operatorsv1alp
 				}
 			}
 		}
-		for _, bundle := range installPlan.Status.BundleLookups {
-			// TODO: add catalog reference check
-			if bundle.Replaces == subscription.Status.InstalledCSV {
-				nextInstallPlan = &installPlan
-				break
+		// Check whether InstallPlan implements the next in the graph operator version.
+		// This will be needed only if no InstallPlan with desired operator
+		// version will be found.
+		for _, csvName := range installPlan.Spec.ClusterServiceVersionNames {
+			log.Info("looking for next installplan", "currentCSV", subscription.Status.CurrentCSV, "installedCSV", subscription.Status.CurrentCSV)
+			// subscription.Status.InstalledCSV contains the currently running CSV.
+			// subscription.Status.CurrentCSV contains the version which "the subscription
+			// is progresing to", practicallty it means the next CSV from the upgrade graph.
+			if csvName == subscription.Status.CurrentCSV && subscription.Status.InstalledCSV != subscription.Status.CurrentCSV {
+				if nextInstallPlan == nil {
+					nextInstallPlan = &installPlan
+					break
+				}
 			}
 		}
 	}
 	if multipleInstallPlans {
 		log.Info(fmt.Sprintf("found multiple valid InstallPlans. using %s because it's the newest", currentInstallPlan.Name))
 	}
-	if !currentInstallPlanFound && subscription.Status.InstalledCSV != r.config.GatewayAPIOperatorVersion /*to avoid going beyond desired csv*/ {
-		currentInstallPlan = nextInstallPlan
+	if currentInstallPlan == nil {
+		// Current install plan cannot be found if it is already complete.
+		// The loop above skips installplans which are not in RequiresApproval phase.
+		// Adding the condition below to avoid approving the next installplan which is
+		// beyond the desired operator version.
+		if subscription.Status.InstalledCSV != r.config.GatewayAPIOperatorVersion {
+			log.Info("installplan with desired operator version is not found, proceed with an intermedite one", "name", nextInstallPlan.Name, "csv", subscription.Status.CurrentCSV)
+			currentInstallPlan = nextInstallPlan
+		}
 	}
 	return (currentInstallPlan != nil), currentInstallPlan, nil
 }

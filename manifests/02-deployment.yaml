@@ -81,6 +81,13 @@ spec:
               value: openshift/origin-cluster-ingress-operator:latest
             - name: GATEWAY_API_OPERATOR_CHANNEL
               value: stable
+            # NOTE
+            # Use the operator version which actually exist in the
+            # the catalog. Versions which do not exist will result into the
+            # installation of the latest OSSM operator version available to
+            # the date of the upgrade.
+            # Downgrades are not possible, the version must be semantically greater
+            # that the previous one.
             - name: GATEWAY_API_OPERATOR_VERSION
               value: servicemeshoperator3.v3.0.0
           resources:
