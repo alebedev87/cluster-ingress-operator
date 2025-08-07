@@ -125,6 +125,7 @@ func TestAll(t *testing.T) {
 		t.Run("TestRouteHardStopAfterEnableOnIngressControllerHasPriorityOverIngressConfig", TestRouteHardStopAfterEnableOnIngressControllerHasPriorityOverIngressConfig)
 		t.Run("TestHostNetworkPortBinding", TestHostNetworkPortBinding)
 		t.Run("TestDashboardCreation", TestDashboardCreation)
+		t.Run("TestOSSMOperatorUpgradeViaIntermediateVersions", TestOSSMOperatorUpgradeViaIntermediateVersions)
 		// TestGatewayAPI creates a test ServiceMeshControlPlane (SMCP) resource,
 		// which triggers the creation of a mutating webhook for all pods in the cluster.
 		// This introduces a race condition where any pod creation request between
