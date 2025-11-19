@@ -20,9 +20,9 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/gopacket v1.1.19
 	github.com/istio-ecosystem/sail-operator v0.0.0-20250513111011-30be83268d6b
-	github.com/openshift/api v0.0.0-20251015095338-264e80a2b6e7
+	github.com/openshift/api v0.0.0-20251119211055-42e832095c64
 	github.com/openshift/client-go v0.0.0-20251015124057-db0dee36e235
-	github.com/openshift/library-go v0.0.0-20250812160438-378de074fe7b
+	github.com/openshift/library-go v0.0.0-20251021141706-f489e811f030
 	github.com/operator-framework/api v0.30.0
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.22.0
@@ -158,9 +158,3 @@ require (
 // This replace stanza is necessary to import
 // github.com/istio-ecosystem/sail-operator.
 replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.5
-
-replace github.com/openshift/api => github.com/alebedev87/api v0.0.0-20251113220147-63babff947de
-
-replace github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20251015124057-db0dee36e235
-
-replace github.com/openshift/library-go => github.com/openshift/library-go v0.0.0-20251021141706-f489e811f030

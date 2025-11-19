@@ -52,8 +52,6 @@ github.com/IBM/go-sdk-core/v5 v5.17.4 h1:VGb9+mRrnS2HpHZFM5hy4J6ppIWnwNrw0G+tLSg
 github.com/IBM/go-sdk-core/v5 v5.17.4/go.mod h1:KsAAI7eStAWwQa4F96MLy+whYSh39JzNjklZRbN/8ns=
 github.com/IBM/networking-go-sdk v0.26.0 h1:K/geWMCgg5P0pbaVQ0eZLhim2G6yOZc8rjszbv2Kmzc=
 github.com/IBM/networking-go-sdk v0.26.0/go.mod h1:tVxXclpQs8nQJYPTr9ZPNC1voaPNQLy8iy/72oVfFtM=
-github.com/alebedev87/api v0.0.0-20251113220147-63babff947de h1:kA1QF3oGoJiszGraSgVHC3YqGp8alTqNP09HnZx+Z0w=
-github.com/alebedev87/api v0.0.0-20251113220147-63babff947de/go.mod h1:d5uzF0YN2nQQFA0jIEWzzOZ+edmo6wzlGLvx5Fhz4uY=
 github.com/antihax/optional v1.0.0/go.mod h1:uupD/76wgC+ih3iEmQUL+0Ugr19nfwCT1kdvxnR2qWY=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
 github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmOABFgjdkM7Nw=
@@ -344,6 +342,8 @@ github.com/onsi/gomega v1.10.1/go.mod h1:iN09h71vgCQne3DLsj+A5owkum+a2tYe+TOCB1y
 github.com/onsi/gomega v1.10.5/go.mod h1:gza4q3jKQJijlu05nKWRCW/GavJumGt8aNRxWg7mt48=
 github.com/onsi/gomega v1.37.0 h1:CdEG8g0S133B4OswTDC/5XPSzE1OeP29QOioj2PID2Y=
 github.com/onsi/gomega v1.37.0/go.mod h1:8D9+Txp43QWKhM24yyOBEdpkzN8FvJyAwecBgsU4KU0=
+github.com/openshift/api v0.0.0-20251119211055-42e832095c64 h1:ZL+LTEE8BCuO1SDM3DqEJXDL3ebSe09Tyw2HnfpxJ6I=
+github.com/openshift/api v0.0.0-20251119211055-42e832095c64/go.mod h1:d5uzF0YN2nQQFA0jIEWzzOZ+edmo6wzlGLvx5Fhz4uY=
 github.com/openshift/client-go v0.0.0-20251015124057-db0dee36e235 h1:9JBeIXmnHlpXTQPi7LPmu1jdxznBhAE7bb1K+3D8gxY=
 github.com/openshift/client-go v0.0.0-20251015124057-db0dee36e235/go.mod h1:L49W6pfrZkfOE5iC1PqEkuLkXG4W0BX4w8b+L2Bv7fM=
 github.com/openshift/library-go v0.0.0-20251021141706-f489e811f030 h1:dbv8ZYDWIl22A5WBjQJTKeENM08f8HwMBuv8glDXO/0=
