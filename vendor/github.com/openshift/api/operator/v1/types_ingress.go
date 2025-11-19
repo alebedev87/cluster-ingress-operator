@@ -298,9 +298,9 @@ type IngressControllerSpec struct {
 	//     case HAProxy handles it in the old process and closes
 	//     the connection after sending the response.
 	//
-	//   - HAProxy's `timeout http-keep-alive` duration expires
-	//     (300 seconds in OpenShift's configuration, not
-	//     configurable).
+	//   - HAProxy's `timeout http-keep-alive` duration expires.
+	//     By default this is 300 seconds, but it can be changed
+	//     using httpKeepAliveTimeout tuning option.
 	//
 	//   - The client's keep-alive timeout expires, causing the
 	//     client to close the connection.
@@ -1890,6 +1890,7 @@ type IngressControllerTuningOptions struct {
 	// This field expects an unsigned duration string of a decimal number, with optional
 	// fraction and a unit suffix, e.g. "300ms", "1.5s" or "2m45s".
 	// Valid time units are "ms", "s", "m".
+	// The allowed range is from 1 millisecond to 15 minutes.
 	//
 	// When omitted, this means the user has no opinion and the platform is left
 	// to choose a reasonable default. This default is subject to change over time.
