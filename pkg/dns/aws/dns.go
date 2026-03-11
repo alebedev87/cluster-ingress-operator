@@ -87,6 +87,10 @@ type Provider struct {
 
 	// lbZones is a cache of load balancer DNS names to LB hosted zone IDs.
 	lbZones map[string]string
+
+	// lbIPAddressType is a cache of load balancer DNS names to their IP
+	// address type (e.g., "ipv4" or "dualstack").
+	lbIPAddressType map[string]string
 }
 
 // Config is the necessary input to configure the manager.
@@ -261,13 +265,14 @@ func NewProvider(config Config, operatorReleaseVersion string) (*Provider, error
 	r53client := route53.New(sessRoute53, r53Config)
 	log.Info("Created route53 client", "endpoint", r53client.Client.Endpoint)
 	p := &Provider{
-		elb:       elbClient,
-		elbv2:     elbv2Client,
-		route53:   r53client,
-		tags:      tags,
-		config:    config,
-		idsToTags: map[string]map[string]string{},
-		lbZones:   map[string]string{},
+		elb:             elbClient,
+		elbv2:           elbv2Client,
+		route53:         r53client,
+		tags:            tags,
+		config:          config,
+		idsToTags:       map[string]map[string]string{},
+		lbZones:         map[string]string{},
+		lbIPAddressType: map[string]string{},
 	}
 	if err := validateServiceEndpointsFn(p); err != nil {
 		return nil, fmt.Errorf("failed to validate aws provider service endpoints: %v", err)
@@ -457,17 +462,18 @@ func zoneIDFromResource(resource string) (string, error) {
 	return submatches[1], nil
 }
 
-// getLBHostedZone finds the hosted zone ID of an ELB whose DNS name matches the
-// name parameter. Results are cached.
-func (m *Provider) getLBHostedZone(name string) (string, error) {
+// getLBHostedZoneAndIPAddressType finds the hosted zone ID of an ELB whose DNS
+// name matches the name parameter. It also returns the IP address type of the
+// load balancer (e.g., "ipv4" or "dualstack"). Results are cached.
+func (m *Provider) getLBHostedZoneAndIPAddressType(name string) (string, string, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	if id, exists := m.lbZones[name]; exists {
-		return id, nil
+		return id, m.lbIPAddressType[name], nil
 	}
 
-	var id string
+	var id, ipAddressType string
 	elbFn := func(resp *elb.DescribeLoadBalancersOutput, lastPage bool) (shouldContinue bool) {
 		for _, lb := range resp.LoadBalancerDescriptions {
 			dnsName := aws.StringValue(lb.DNSName)
@@ -482,7 +488,7 @@ func (m *Provider) getLBHostedZone(name string) (string, error) {
 	}
 	err := m.elb.DescribeLoadBalancersPages(&elb.DescribeLoadBalancersInput{}, elbFn)
 	if err != nil {
-		return "", fmt.Errorf("failed to describe classic load balancers: %v", err)
+		return "", "", fmt.Errorf("failed to describe classic load balancers: %v", err)
 	}
 	if len(id) == 0 {
 		elbv2Fn := func(resp *elbv2.DescribeLoadBalancersOutput, lastPage bool) (shouldContinue bool) {
@@ -492,6 +498,7 @@ func (m *Provider) getLBHostedZone(name string) (string, error) {
 				log.V(2).Info("found network load balancer", "name", aws.StringValue(lb.LoadBalancerName), "dns name", dnsName, "hosted zone ID", zoneID)
 				if dnsName == name {
 					id = zoneID
+					ipAddressType = aws.StringValue(lb.IpAddressType)
 					return false
 				}
 			}
@@ -499,15 +506,16 @@ func (m *Provider) getLBHostedZone(name string) (string, error) {
 		}
 		err := m.elbv2.DescribeLoadBalancersPages(&elbv2.DescribeLoadBalancersInput{}, elbv2Fn)
 		if err != nil {
-			return "", fmt.Errorf("failed to describe network load balancers: %v", err)
+			return "", "", fmt.Errorf("failed to describe network load balancers: %v", err)
 		}
 	}
 	if len(id) == 0 {
-		return "", fmt.Errorf("couldn't find hosted zone ID of ELB %s", name)
+		return "", "", fmt.Errorf("couldn't find hosted zone ID of ELB %s", name)
 	}
-	log.V(2).Info("associating load balancer with hosted zone", "dns name", name, "zone", id)
+	log.V(2).Info("associating load balancer with hosted zone", "dns name", name, "zone", id, "ipAddressType", ipAddressType)
 	m.lbZones[name] = id
-	return id, nil
+	m.lbIPAddressType[name] = ipAddressType
+	return id, ipAddressType, nil
 }
 
 type action string
@@ -550,7 +558,7 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 	}
 
 	// Find the target hosted zone of the load balancer attached to the service.
-	targetHostedZoneID, err := m.getLBHostedZone(target)
+	targetHostedZoneID, targetIPAddressType, err := m.getLBHostedZoneAndIPAddressType(target)
 	if err != nil {
 		err = fmt.Errorf("failed to get hosted zone for load balancer target %q: %v", target, err)
 		if v, ok := record.Annotations[targetHostedZoneIdAnnotationKey]; !ok {
@@ -589,7 +597,7 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 	}
 
 	// Configure records.
-	err = m.updateRecord(domain, zoneID, target, targetHostedZoneID, string(action), record.Spec.RecordTTL)
+	err = m.updateRecord(domain, zoneID, target, targetHostedZoneID, targetIPAddressType, string(action), record.Spec.RecordTTL)
 	if err != nil {
 		return fmt.Errorf("failed to update alias in zone %s: %v", zoneID, err)
 	}
@@ -607,7 +615,7 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 // other than GovCloud (CNAME). See the following for additional details:
 // https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-r53.html
 // Note that by API contract, TTL cannot be specified for an AliasTarget.
-func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, action string, ttl int64) error {
+func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, targetIPAddressType, action string, ttl int64) error {
 	input := route53.ChangeResourceRecordSetsInput{HostedZoneId: aws.String(zoneID)}
 	if clientEndpointIsGovCloud(&m.route53.Client.ClientInfo) {
 		record := route53.ResourceRecord{Value: aws.String(target)}
@@ -640,7 +648,7 @@ func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, acti
 				},
 			},
 		}
-		if awsutil.IsDualStack(m.config.IPFamily) {
+		if awsutil.IsDualStack(m.config.IPFamily) && targetIPAddressType == elbv2.IpAddressTypeDualstack {
 			changes = append(changes, &route53.Change{
 				Action: aws.String(action),
 				ResourceRecordSet: &route53.ResourceRecordSet{
