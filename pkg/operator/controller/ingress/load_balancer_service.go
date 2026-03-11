@@ -15,6 +15,7 @@ import (
 
 	"github.com/openshift/cluster-ingress-operator/pkg/manifests"
 	"github.com/openshift/cluster-ingress-operator/pkg/operator/controller"
+	awsutil "github.com/openshift/cluster-ingress-operator/pkg/util/aws"
 	corev1 "k8s.io/api/core/v1"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -897,7 +898,7 @@ func loadBalancerServiceIsProgressing(ic *operatorv1.IngressController, service 
 			errs = append(errs, err)
 
 			// Add a note to the effectuation message about CLB not supporting dual-stack.
-			if wantLBType == operatorv1.AWSClassicLoadBalancer && platform.AWS != nil && isAWSDualStack(platform.AWS.IPFamily) {
+			if wantLBType == operatorv1.AWSClassicLoadBalancer && platform.AWS != nil && awsutil.IsDualStack(platform.AWS.IPFamily) {
 				errs = append(errs, fmt.Errorf("Classic Load Balancers do not support dual-stack. The IngressController %q will use IPv4-only despite that the cluster is configured as %q. Use an NLB type to support dual-stack networking.", ic.Name, platform.AWS.IPFamily))
 			}
 		}
@@ -1428,11 +1429,6 @@ func getAllowedSourceRanges(eps *operatorv1.EndpointPublishingStrategy) []operat
 	return nil
 }
 
-// isAWSDualStack returns true if the given IPFamilyType indicates a dual-stack
-// configuration.
-func isAWSDualStack(ipFamily configv1.IPFamilyType) bool {
-	return ipFamily == configv1.DualStackIPv4Primary || ipFamily == configv1.DualStackIPv6Primary
-}
 
 // isAWSNLB returns true if the IngressController's load balancer status
 // indicates an AWS Network Load Balancer.
