@@ -53,6 +53,10 @@ const (
 	// the ELB that is associated with the record, which is needed when
 	// deleting the record.
 	targetHostedZoneIdAnnotationKey = "ingress.operator.openshift.io/target-hosted-zone-id"
+	// targetIPAddressTypeAnnotationKey is the key of an annotation that
+	// this provider adds to DNSRecord CRs to track the IP address type
+	// of the ELB that is associated with the record.
+	targetIPAddressTypeAnnotationKey = "ingress.operator.openshift.io/target-ip-address-type"
 )
 
 var (
@@ -560,17 +564,23 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 	// Find the target hosted zone of the load balancer attached to the service.
 	targetHostedZoneID, targetIPAddressType, err := m.getLBHostedZoneAndIPAddressType(target)
 	if err != nil {
-		err = fmt.Errorf("failed to get hosted zone for load balancer target %q: %v", target, err)
 		if v, ok := record.Annotations[targetHostedZoneIdAnnotationKey]; !ok {
-			return err
+			return fmt.Errorf("failed to get hosted zone for load balancer target %q: %v", target, err)
 		} else {
 			log.Error(err, "falling back to the "+targetHostedZoneIdAnnotationKey+" annotation", "value", v)
 			targetHostedZoneID = v
 		}
+		if v, ok := record.Annotations[targetIPAddressTypeAnnotationKey]; !ok {
+			return fmt.Errorf("failed to get ip address type for load balancer target %q: %v", target, err)
+		} else {
+			log.Info("falling back to the "+targetIPAddressTypeAnnotationKey+" annotation", "value", v)
+			targetIPAddressType = v
+		}
 	}
-	// If this is an upsert, store the target hosted zone id in an
-	// annotation on the DNSRecord CR in case we later on need the id
-	// and for whatever reason cannot look it up using the AWS API.
+	// If this is an upsert, store the target hosted zone id and IP
+	// address type in annotations on the DNSRecord CR in case we later
+	// on need them and for whatever reason cannot look them up using
+	// the AWS API.
 	if action == upsertAction {
 		var current iov1.DNSRecord
 		name := types.NamespacedName{
@@ -578,20 +588,25 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 			Name:      record.Name,
 		}
 		if err := m.config.Client.Get(context.TODO(), name, &current); err != nil {
-			// Log the error and continue.  The annotation is only
+			// Log the error and continue.  The annotations are only
 			// needed as a fallback mechanism, and anyway we might
-			// succeed in adding it on the next upsert.
+			// succeed in adding them on the next upsert.
 			log.Error(err, "failed to get dnsrecord", "dnsrecord", name)
-		} else if _, ok := current.Annotations[targetHostedZoneIdAnnotationKey]; !ok {
-			updated := current.DeepCopy()
-			if updated.Annotations == nil {
-				updated.Annotations = map[string]string{}
-			}
-			updated.Annotations[targetHostedZoneIdAnnotationKey] = targetHostedZoneID
-			if err := m.config.Client.Update(context.TODO(), updated); err != nil {
-				log.Error(err, "failed to annotate dnsrecord", "dnsrecord", name)
-			} else {
-				log.Info("annotated dnsrecord", "dnsrecord", name, "key", targetHostedZoneIdAnnotationKey, "value", targetHostedZoneID)
+		} else {
+			_, hasZoneID := current.Annotations[targetHostedZoneIdAnnotationKey]
+			_, hasIPAddressType := current.Annotations[targetIPAddressTypeAnnotationKey]
+			if !hasZoneID || !hasIPAddressType {
+				updated := current.DeepCopy()
+				if updated.Annotations == nil {
+					updated.Annotations = map[string]string{}
+				}
+				updated.Annotations[targetHostedZoneIdAnnotationKey] = targetHostedZoneID
+				updated.Annotations[targetIPAddressTypeAnnotationKey] = targetIPAddressType
+				if err := m.config.Client.Update(context.TODO(), updated); err != nil {
+					log.Error(err, "failed to annotate dnsrecord", "dnsrecord", name)
+				} else {
+					log.Info("annotated dnsrecord", "dnsrecord", name, "key1", targetHostedZoneIdAnnotationKey, "value1", targetHostedZoneID, "key2", targetIPAddressTypeAnnotationKey, "value2", targetIPAddressType)
+				}
 			}
 		}
 	}
