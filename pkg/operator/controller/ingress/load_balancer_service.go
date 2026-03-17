@@ -895,12 +895,11 @@ func loadBalancerServiceIsProgressing(ic *operatorv1.IngressController, service 
 		if wantLBType != haveLBType {
 			patchSpec := fmt.Sprintf(`{"spec":{"endpointPublishingStrategy":{"type":"LoadBalancerService","loadBalancer":{"providerParameters":{"type":"AWS","aws":{"type":"%s"}}}}}}`, haveLBType)
 			err := createEffectuationMessage("loadBalancer.providerParameters.aws.type", string(haveLBType), string(wantLBType), patchSpec, ic, service)
-			errs = append(errs, err)
-
 			// Add a note to the effectuation message about CLB not supporting dual-stack.
 			if wantLBType == operatorv1.AWSClassicLoadBalancer && platform.AWS != nil && awsutil.IsDualStack(platform.AWS.IPFamily) {
-				errs = append(errs, fmt.Errorf("Classic Load Balancers do not support dual-stack. The IngressController %q will use IPv4-only despite that the cluster is configured as %q. Use an NLB type to support dual-stack networking.", ic.Name, platform.AWS.IPFamily))
+				err = fmt.Errorf("%w Classic Load Balancers do not support dual-stack. The IngressController %q will use IPv4-only despite that the cluster is configured as %q. Use an NLB type to support dual-stack networking.", err, ic.Name, platform.AWS.IPFamily)
 			}
+			errs = append(errs, err)
 		}
 
 		var (
