@@ -1428,7 +1428,6 @@ func getAllowedSourceRanges(eps *operatorv1.EndpointPublishingStrategy) []operat
 	return nil
 }
 
-
 // isAWSNLB returns true if the IngressController's load balancer status
 // indicates an AWS Network Load Balancer.
 func isAWSNLB(lbStatus *operatorv1.LoadBalancerStrategy) bool {

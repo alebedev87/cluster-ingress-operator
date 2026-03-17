@@ -53,10 +53,6 @@ const (
 	// the ELB that is associated with the record, which is needed when
 	// deleting the record.
 	targetHostedZoneIdAnnotationKey = "ingress.operator.openshift.io/target-hosted-zone-id"
-	// targetIPAddressTypeAnnotationKey is the key of an annotation that
-	// this provider adds to DNSRecord CRs to track the IP address type
-	// of the ELB that is associated with the record.
-	targetIPAddressTypeAnnotationKey = "ingress.operator.openshift.io/target-ip-address-type"
 )
 
 var (
@@ -91,10 +87,6 @@ type Provider struct {
 
 	// lbZones is a cache of load balancer DNS names to LB hosted zone IDs.
 	lbZones map[string]string
-
-	// lbIPAddressType is a cache of load balancer DNS names to their IP
-	// address type (e.g., "ipv4" or "dualstack").
-	lbIPAddressType map[string]string
 }
 
 // Config is the necessary input to configure the manager.
@@ -269,14 +261,13 @@ func NewProvider(config Config, operatorReleaseVersion string) (*Provider, error
 	r53client := route53.New(sessRoute53, r53Config)
 	log.Info("Created route53 client", "endpoint", r53client.Client.Endpoint)
 	p := &Provider{
-		elb:             elbClient,
-		elbv2:           elbv2Client,
-		route53:         r53client,
-		tags:            tags,
-		config:          config,
-		idsToTags:       map[string]map[string]string{},
-		lbZones:         map[string]string{},
-		lbIPAddressType: map[string]string{},
+		elb:       elbClient,
+		elbv2:     elbv2Client,
+		route53:   r53client,
+		tags:      tags,
+		config:    config,
+		idsToTags: map[string]map[string]string{},
+		lbZones:   map[string]string{},
 	}
 	if err := validateServiceEndpointsFn(p); err != nil {
 		return nil, fmt.Errorf("failed to validate aws provider service endpoints: %v", err)
@@ -466,18 +457,17 @@ func zoneIDFromResource(resource string) (string, error) {
 	return submatches[1], nil
 }
 
-// getLBHostedZoneAndIPAddressType finds the hosted zone ID of an ELB whose DNS
-// name matches the name parameter. It also returns the IP address type of the
-// load balancer (e.g., "ipv4" or "dualstack"). Results are cached.
-func (m *Provider) getLBHostedZoneAndIPAddressType(name string) (string, string, error) {
+// getLBHostedZone finds the hosted zone ID of an ELB whose DNS name matches the
+// name parameter. Results are cached.
+func (m *Provider) getLBHostedZone(name string) (string, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
 	if id, exists := m.lbZones[name]; exists {
-		return id, m.lbIPAddressType[name], nil
+		return id, nil
 	}
 
-	var id, ipAddressType string
+	var id string
 	elbFn := func(resp *elb.DescribeLoadBalancersOutput, lastPage bool) (shouldContinue bool) {
 		for _, lb := range resp.LoadBalancerDescriptions {
 			dnsName := aws.StringValue(lb.DNSName)
@@ -492,7 +482,7 @@ func (m *Provider) getLBHostedZoneAndIPAddressType(name string) (string, string,
 	}
 	err := m.elb.DescribeLoadBalancersPages(&elb.DescribeLoadBalancersInput{}, elbFn)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to describe classic load balancers: %v", err)
+		return "", fmt.Errorf("failed to describe classic load balancers: %v", err)
 	}
 	if len(id) == 0 {
 		elbv2Fn := func(resp *elbv2.DescribeLoadBalancersOutput, lastPage bool) (shouldContinue bool) {
@@ -502,7 +492,6 @@ func (m *Provider) getLBHostedZoneAndIPAddressType(name string) (string, string,
 				log.V(2).Info("found network load balancer", "name", aws.StringValue(lb.LoadBalancerName), "dns name", dnsName, "hosted zone ID", zoneID)
 				if dnsName == name {
 					id = zoneID
-					ipAddressType = aws.StringValue(lb.IpAddressType)
 					return false
 				}
 			}
@@ -510,16 +499,15 @@ func (m *Provider) getLBHostedZoneAndIPAddressType(name string) (string, string,
 		}
 		err := m.elbv2.DescribeLoadBalancersPages(&elbv2.DescribeLoadBalancersInput{}, elbv2Fn)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to describe network load balancers: %v", err)
+			return "", fmt.Errorf("failed to describe network load balancers: %v", err)
 		}
 	}
 	if len(id) == 0 {
-		return "", "", fmt.Errorf("couldn't find hosted zone ID of ELB %s", name)
+		return "", fmt.Errorf("couldn't find hosted zone ID of ELB %s", name)
 	}
-	log.V(2).Info("associating load balancer with hosted zone", "dns name", name, "zone", id, "ipAddressType", ipAddressType)
+	log.V(2).Info("associating load balancer with hosted zone", "dns name", name, "zone", id)
 	m.lbZones[name] = id
-	m.lbIPAddressType[name] = ipAddressType
-	return id, ipAddressType, nil
+	return id, nil
 }
 
 type action string
@@ -562,25 +550,19 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 	}
 
 	// Find the target hosted zone of the load balancer attached to the service.
-	targetHostedZoneID, targetIPAddressType, err := m.getLBHostedZoneAndIPAddressType(target)
+	targetHostedZoneID, err := m.getLBHostedZone(target)
 	if err != nil {
+		err = fmt.Errorf("failed to get hosted zone for load balancer target %q: %v", target, err)
 		if v, ok := record.Annotations[targetHostedZoneIdAnnotationKey]; !ok {
-			return fmt.Errorf("failed to get hosted zone for load balancer target %q: %v", target, err)
+			return err
 		} else {
 			log.Error(err, "falling back to the "+targetHostedZoneIdAnnotationKey+" annotation", "value", v)
 			targetHostedZoneID = v
 		}
-		if v, ok := record.Annotations[targetIPAddressTypeAnnotationKey]; !ok {
-			return fmt.Errorf("failed to get ip address type for load balancer target %q: %v", target, err)
-		} else {
-			log.Info("falling back to the "+targetIPAddressTypeAnnotationKey+" annotation", "value", v)
-			targetIPAddressType = v
-		}
 	}
-	// If this is an upsert, store the target hosted zone id and IP
-	// address type in annotations on the DNSRecord CR in case we later
-	// on need them and for whatever reason cannot look them up using
-	// the AWS API.
+	// If this is an upsert, store the target hosted zone id in an
+	// annotation on the DNSRecord CR in case we later on need the id
+	// and for whatever reason cannot look it up using the AWS API.
 	if action == upsertAction {
 		var current iov1.DNSRecord
 		name := types.NamespacedName{
@@ -588,31 +570,26 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 			Name:      record.Name,
 		}
 		if err := m.config.Client.Get(context.TODO(), name, &current); err != nil {
-			// Log the error and continue.  The annotations are only
+			// Log the error and continue.  The annotation is only
 			// needed as a fallback mechanism, and anyway we might
-			// succeed in adding them on the next upsert.
+			// succeed in adding it on the next upsert.
 			log.Error(err, "failed to get dnsrecord", "dnsrecord", name)
-		} else {
-			_, hasZoneID := current.Annotations[targetHostedZoneIdAnnotationKey]
-			_, hasIPAddressType := current.Annotations[targetIPAddressTypeAnnotationKey]
-			if !hasZoneID || !hasIPAddressType {
-				updated := current.DeepCopy()
-				if updated.Annotations == nil {
-					updated.Annotations = map[string]string{}
-				}
-				updated.Annotations[targetHostedZoneIdAnnotationKey] = targetHostedZoneID
-				updated.Annotations[targetIPAddressTypeAnnotationKey] = targetIPAddressType
-				if err := m.config.Client.Update(context.TODO(), updated); err != nil {
-					log.Error(err, "failed to annotate dnsrecord", "dnsrecord", name)
-				} else {
-					log.Info("annotated dnsrecord", "dnsrecord", name, "key1", targetHostedZoneIdAnnotationKey, "value1", targetHostedZoneID, "key2", targetIPAddressTypeAnnotationKey, "value2", targetIPAddressType)
-				}
+		} else if _, ok := current.Annotations[targetHostedZoneIdAnnotationKey]; !ok {
+			updated := current.DeepCopy()
+			if updated.Annotations == nil {
+				updated.Annotations = map[string]string{}
+			}
+			updated.Annotations[targetHostedZoneIdAnnotationKey] = targetHostedZoneID
+			if err := m.config.Client.Update(context.TODO(), updated); err != nil {
+				log.Error(err, "failed to annotate dnsrecord", "dnsrecord", name)
+			} else {
+				log.Info("annotated dnsrecord", "dnsrecord", name, "key", targetHostedZoneIdAnnotationKey, "value", targetHostedZoneID)
 			}
 		}
 	}
 
 	// Configure records.
-	err = m.updateRecord(domain, zoneID, target, targetHostedZoneID, targetIPAddressType, string(action), record.Spec.RecordTTL)
+	err = m.updateRecord(domain, zoneID, target, targetHostedZoneID, string(action), record.Spec.RecordTTL)
 	if err != nil {
 		return fmt.Errorf("failed to update alias in zone %s: %v", zoneID, err)
 	}
@@ -630,7 +607,7 @@ func (m *Provider) change(record *iov1.DNSRecord, zone configv1.DNSZone, action 
 // other than GovCloud (CNAME). See the following for additional details:
 // https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-r53.html
 // Note that by API contract, TTL cannot be specified for an AliasTarget.
-func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, targetIPAddressType, action string, ttl int64) error {
+func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, action string, ttl int64) error {
 	input := route53.ChangeResourceRecordSetsInput{HostedZoneId: aws.String(zoneID)}
 	if clientEndpointIsGovCloud(&m.route53.Client.ClientInfo) {
 		record := route53.ResourceRecord{Value: aws.String(target)}
@@ -663,7 +640,7 @@ func (m *Provider) updateRecord(domain, zoneID, target, targetHostedZoneID, targ
 				},
 			},
 		}
-		if awsutil.IsDualStack(m.config.IPFamily) && targetIPAddressType == elbv2.IpAddressTypeDualstack {
+		if awsutil.IsDualStack(m.config.IPFamily) {
 			changes = append(changes, &route53.Change{
 				Action: aws.String(action),
 				ResourceRecordSet: &route53.ResourceRecordSet{
