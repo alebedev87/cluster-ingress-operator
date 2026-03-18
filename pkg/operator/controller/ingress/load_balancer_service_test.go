@@ -960,7 +960,7 @@ func TestDesiredLoadBalancerServiceDualStack(t *testing.T) {
 			expectedIPFamilyPolicy: nil,
 		},
 		{
-			name:           "CLB with DualStackIPv4Primary does not set ipFamilies",
+			name:           "CLB with DualStackIPv4Primary sets SingleStack/IPv4",
 			strategyStatus: clbStrategy(operatorv1.ExternalLoadBalancer),
 			platformStatus: &configv1.PlatformStatus{
 				Type: configv1.AWSPlatformType,
@@ -968,11 +968,11 @@ func TestDesiredLoadBalancerServiceDualStack(t *testing.T) {
 					IPFamily: configv1.DualStackIPv4Primary,
 				},
 			},
-			expectedIPFamilies:     nil,
-			expectedIPFamilyPolicy: nil,
+			expectedIPFamilies:     []corev1.IPFamily{corev1.IPv4Protocol},
+			expectedIPFamilyPolicy: ipFamilyPolicyPtr(corev1.IPFamilyPolicySingleStack),
 		},
 		{
-			name:           "CLB with DualStackIPv6Primary does not set ipFamilies",
+			name:           "CLB with DualStackIPv6Primary sets SingleStack/IPv4",
 			strategyStatus: clbStrategy(operatorv1.ExternalLoadBalancer),
 			platformStatus: &configv1.PlatformStatus{
 				Type: configv1.AWSPlatformType,
@@ -980,8 +980,8 @@ func TestDesiredLoadBalancerServiceDualStack(t *testing.T) {
 					IPFamily: configv1.DualStackIPv6Primary,
 				},
 			},
-			expectedIPFamilies:     nil,
-			expectedIPFamilyPolicy: nil,
+			expectedIPFamilies:     []corev1.IPFamily{corev1.IPv4Protocol},
+			expectedIPFamilyPolicy: ipFamilyPolicyPtr(corev1.IPFamilyPolicySingleStack),
 		},
 	}
 

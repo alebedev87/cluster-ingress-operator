@@ -498,17 +498,28 @@ func desiredLoadBalancerService(ci *operatorv1.IngressController, deploymentRef 
 			}
 
 			// Set ipFamilies and ipFamilyPolicy for dual-stack clusters.
-			// Only NLB supports dual-stack; CLB does not.
-			if platform.AWS != nil && isAWSNLB(lbStatus) {
-				switch platform.AWS.IPFamily {
-				case configv1.DualStackIPv4Primary:
+			if platform.AWS != nil && awsutil.IsDualStack(platform.AWS.IPFamily) {
+				if isAWSNLB(lbStatus) {
+					// NLB supports dual-stack natively.
 					ipFamilyPolicy := corev1.IPFamilyPolicyRequireDualStack
 					service.Spec.IPFamilyPolicy = &ipFamilyPolicy
-					service.Spec.IPFamilies = []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}
-				case configv1.DualStackIPv6Primary:
-					ipFamilyPolicy := corev1.IPFamilyPolicyRequireDualStack
+					if platform.AWS.IPFamily == configv1.DualStackIPv4Primary {
+						service.Spec.IPFamilies = []corev1.IPFamily{corev1.IPv4Protocol, corev1.IPv6Protocol}
+					} else {
+						service.Spec.IPFamilies = []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}
+					}
+				} else {
+					// CLB does not support dual-stack and only forwards
+					// IPv4 traffic. On DualStackIPv4Primary clusters,
+					// the service defaults to SingleStack/IPv4, which
+					// is correct. However on DualStackIPv6Primary, the
+					// default would be SingleStack/IPv6, causing OVN to
+					// refuse IPv4 traffic on the service's NodePort.
+					// Explicitly set SingleStack/IPv4 to ensure CLB
+					// traffic is always accepted.
+					ipFamilyPolicy := corev1.IPFamilyPolicySingleStack
 					service.Spec.IPFamilyPolicy = &ipFamilyPolicy
-					service.Spec.IPFamilies = []corev1.IPFamily{corev1.IPv6Protocol, corev1.IPv4Protocol}
+					service.Spec.IPFamilies = []corev1.IPFamily{corev1.IPv4Protocol}
 				}
 			}
 
